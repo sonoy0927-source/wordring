@@ -248,9 +248,11 @@
       <div class="meter"><div style="width:${pct}%"></div></div>
       ${s.overdue ? `<div class="sub">残り ${s.left} 語を終えると一周です。日数を変えて計画し直すこともできます。</div>`
         : met ? `<div class="sub">先に進めておくと、明日からの1日の数が減ります。</div>` : ""}
-      <div class="actions"><button class="btn" id="plan-go">${met ? "明日の分も進める" : "今日の分を始める"}</button><button class="btn ghost" id="plan-edit">日数を変える</button></div>
+      <div class="actions">${met && s.doneToday ? `<button class="btn" id="plan-review">今日の分をもう一度</button>` : ""}<button class="btn ${met ? "ghost" : ""}" id="plan-go">${met ? "明日の分も進める" : "今日の分を始める"}</button><button class="btn ghost" id="plan-edit">日数を変える</button></div>
     </div>`;
-    $("#plan-go").onclick = () => { ui.view = "study"; ui.studySet = "today"; saveUi(); render(); startStudy(met); };
+    const goStudy = arg => { ui.view = "study"; ui.studySet = "today"; saveUi(); render(); startStudy(arg); };
+    $("#plan-go").onclick = () => goStudy(met);
+    $("#plan-review")?.addEventListener("click", () => goStudy("review"));
     $("#plan-edit").onclick = () => { planEdit = true; renderPlan(); };
   }
 
@@ -402,7 +404,7 @@
   };
 
   // ---------- flashcards ----------
-  let study = { queue: [], i: 0, flipped: false, known: 0 };
+  let study = { queue: [], i: 0, flipped: false, known: 0, missed: [] };
   function segBind(id, key, after) {
     const el = $("#" + id);
     el.onclick = e => { const b = e.target.closest("button"); if (!b) return; ui[key] = b.dataset.v; saveUi(); syncSegs(); after(); };
@@ -415,17 +417,34 @@
   segBind("study-set", "studySet", startStudy);
   segBind("quiz-dir", "quizDir", startQuiz);
 
+  // extra: true = also take tomorrow's share, "review" = today's words again, "missed" = only the ones marked まだ last time
   function startStudy(extra = false) {
     let pool;
-    if (ui.studySet === "today") {
+    if (ui.studySet === "today" && extra === "review") {
+      pool = shuffle(words.filter(seenToday));
+    } else if (ui.studySet === "today" && extra === "missed") {
+      pool = shuffle(study.missed.map(id => words.find(w => w.id === id)).filter(Boolean));
+    } else if (ui.studySet === "today") {
       const s = plan ? planInfo() : null;
       const n = !s ? 0 : extra === true ? s.quota : s.todayLeft;
       pool = shuffle(words.filter(w => !seenInRound(w))).slice(0, n);
     } else {
       pool = shuffle(ui.studySet === "todo" ? words.filter(w => (w.level || 0) < MAX_LV) : words);
     }
-    study = { queue: pool.map(w => w.id), i: 0, flipped: false, known: 0 };
+    study = { queue: pool.map(w => w.id), i: 0, flipped: false, known: 0, missed: [] };
     renderStudy();
+  }
+  // Buttons for going over today's words again, shown once today's share is done.
+  function reviewButtons() {
+    const n = words.filter(seenToday).length;
+    if (!n) return "";
+    const m = study.missed.length;
+    return `<button class="btn primary" id="rv-all">今日の ${n} 語をもう一度</button>`
+      + (m && m < n ? `<button class="btn" id="rv-missed">「まだ」の ${m} 語だけ</button>` : "");
+  }
+  function bindReview() {
+    $("#rv-all")?.addEventListener("click", () => startStudy("review"));
+    $("#rv-missed")?.addEventListener("click", () => startStudy("missed"));
   }
   function goPlan() { ui.view = "list"; saveUi(); render(); $("#plan-host").scrollIntoView({ block: "start" }); }
   function renderStudyPlan() {
@@ -446,12 +465,12 @@
     if (ui.studySet === "today" && (!study.queue.length || study.i >= study.queue.length)) {
       const s = planInfo();
       if (s.left === 0) {
-        host.innerHTML = `<div class="empty"><strong>第${plan.round}周 完了</strong><p>${s.total} 語をすべて一周しました。次の周は「単語」タブから始められます。</p><button class="btn primary" id="to-plan">次の周へ</button></div>`;
-        $("#to-plan").onclick = goPlan; return;
+        host.innerHTML = `<div class="empty"><strong>第${plan.round}周 完了</strong><p>${s.total} 語をすべて一周しました。次の周は「単語」タブから始められます。</p><div class="actions" style="justify-content:center">${reviewButtons()}<button class="btn" id="to-plan">次の周へ</button></div></div>`;
+        $("#to-plan").onclick = goPlan; bindReview(); return;
       }
       if (s.todayLeft === 0) {
-        host.innerHTML = `<div class="empty"><strong>今日の ${s.quota} 語 完了</strong><p>${study.queue.length ? `覚えた ${study.known} 枚 / まだ ${study.queue.length - study.known} 枚。` : ""}この周は残り ${s.left} 語です。先に進めておくと、明日からの1日の数が減ります。</p><button class="btn" id="more">明日の分も進める</button></div>`;
-        $("#more").onclick = () => startStudy(true); return;
+        host.innerHTML = `<div class="empty"><strong>今日の ${s.quota} 語 完了</strong><p>${study.queue.length ? `覚えた ${study.known} 枚 / まだ ${study.queue.length - study.known} 枚。` : ""}何度でも繰り返せます。先に進めておくと、明日からの1日の数が減ります。</p><div class="actions" style="justify-content:center">${reviewButtons()}<button class="btn" id="more">明日の分も進める</button></div></div>`;
+        $("#more").onclick = () => startStudy(true); bindReview(); return;
       }
       if (!study.queue.length) { startStudy(); if (study.queue.length) return; }
     }
@@ -483,7 +502,7 @@
   function flip() { study.flipped = !study.flipped; $("#card")?.classList.toggle("flipped", study.flipped); }
   function judge(w, ok) {
     const lv = Math.max(0, Math.min(MAX_LV, (w.level || 0) + (ok ? 1 : -1)));
-    if (ok) study.known++;
+    if (ok) study.known++; else study.missed.push(w.id);
     study.i++; study.flipped = false;
     const next = markSeen({ ...w, level: lv });
     if (lv !== (w.level || 0) || next.seenRound !== w.seenRound) save(next).catch(() => {});

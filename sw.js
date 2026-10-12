@@ -1,6 +1,6 @@
 // Offline support: app files are served from cache and refreshed in the background.
 // Bump VERSION when you change the app so phones pick up the new files.
-const VERSION = "wordring-v1";
+const VERSION = "wordring-v2";
 const SHELL = ["./", "index.html", "style.css", "app.js", "firebase-config.js", "manifest.webmanifest", "icon.svg", "icons/icon-192.png"];
 
 self.addEventListener("install", e => {
