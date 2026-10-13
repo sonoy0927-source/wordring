@@ -115,7 +115,7 @@
     store.mode = "local"; store.uid = null;
     const { w, p, b } = store.readLocal();
     allWords = w; plans = p; books = b || [{ id: MAIN_BOOK, name: "マイ単語帳" }];
-    applyBook(); firstData = true;
+    fixOldTags(); applyBook(); firstData = true;
     setSync(false, fb ? "この端末だけに保存中" : "この端末に保存");
     render();
   }
@@ -136,7 +136,7 @@
       });
       allWords = nextWords; plans = nextPlans;
       books = Array.isArray(list) && list.length ? list : [{ id: MAIN_BOOK, name: "マイ単語帳" }];
-      applyBook(); render();
+      fixOldTags(); applyBook(); render();
     }, () => setSync(false, "同期できません。再読み込みしてください"));
     offerMigration();
   }
@@ -216,7 +216,36 @@
     } catch { toast("この環境では読み上げできません"); }
   }
   const lvDots = lv => `<span class="lv" title="習熟度 ${lv}/${MAX_LV}">${[1,2,3].map(i => `<i class="${i <= lv ? "on" : ""}"></i>`).join("")}</span>`;
+  // Circled numbers in tags (①, ⑫, ㉑, ❸ …) become plain two-digit numbers (01, 12, 21, 03),
+  // so tags like 第①章 and 第⑫章 read and sort the same way as typed numbers.
+  const CIRCLED = [
+    [0x2460, 0x2473, 1], [0x3251, 0x325F, 21], [0x32B1, 0x32BF, 36], [0x24EA, 0x24EA, 0],
+    [0x24EB, 0x24F4, 11], [0x24F5, 0x24FE, 1], [0x2776, 0x277F, 1], [0x2780, 0x2789, 1], [0x278A, 0x2793, 1],
+  ];
+  function circledValue(ch) {
+    const c = ch.codePointAt(0);
+    for (const [lo, hi, first] of CIRCLED) if (c >= lo && c <= hi) return first + c - lo;
+    return null;
+  }
+  const normTag = t => [...String(t || "")].map(ch => { const n = circledValue(ch); return n == null ? ch : String(n).padStart(2, "0"); }).join("");
+  // Rewrites tags saved before this rule existed. Safe to run on every load: nothing changes twice.
+  function fixOldTags() {
+    const todo = allWords.filter(w => w.tag && normTag(w.tag) !== w.tag);
+    if (!todo.length) return;
+    if (store.mode === "db") {
+      for (let i = 0; i < todo.length; i += 400) {
+        const b = fb.mod.writeBatch(fb.db);
+        todo.slice(i, i + 400).forEach(w => b.update(store.ref(w.id), { tag: normTag(w.tag) }));
+        store.cloud(b.commit());
+      }
+    } else {
+      allWords = allWords.map(w => w.tag ? { ...w, tag: normTag(w.tag) } : w);
+      store.saveLocal(); applyBook();
+    }
+  }
+
   async function save(w) {
+    if (w.tag) w = { ...w, tag: normTag(w.tag) };
     try { await store.put(w); }
     catch (e) { toast(e?.code === "quota_exceeded" ? "保存できる上限に達しました。不要な単語を削除してください" : "保存できませんでした。もう一度試してください"); throw e; }
   }
