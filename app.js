@@ -7,17 +7,34 @@
   const ICON_SPEAK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>';
   const ICON_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
 
-  let words = [];
-  const ui = { view: "list", sheet: false, q: "", tag: "", studyDir: "en", studySet: "todo", quizDir: "en" };
+  // allWords holds every book; words is the current book's slice that the screens work on.
+  let allWords = [], words = [];
+  const MAIN_BOOK = "main";
+  let books = [{ id: MAIN_BOOK, name: "マイ単語帳" }];
+  const bookOf = w => w.book || MAIN_BOOK;
+  const ui = { view: "list", sheet: false, q: "", tag: "", studyDir: "en", studySet: "todo", quizDir: "en", book: MAIN_BOOK };
   try { Object.assign(ui, JSON.parse(localStorage.getItem("wordring.ui") || "{}"), { q: "" }); } catch {}
   const saveUi = () => { try { localStorage.setItem("wordring.ui", JSON.stringify(ui)); } catch {} };
 
   // ---------- storage: Firestore when signed in, else this browser ----------
-  // Firestore layout: users/{uid}/words/{wordId}, plus users/{uid}/words/_plan for the round plan.
-  const LOCAL_KEY = "wordring.words", PLAN_KEY = "wordring.plan", PLAN_ID = "_plan";
-  let plan = null; // { days, start, round, todayDate, todayQuota }
-  let fb = null;   // { auth, db, mod: firebase functions } once Firebase is configured
+  // Firestore layout: users/{uid}/words/{wordId} (each word has a `book` field),
+  // users/{uid}/words/_books for the book list, and one plan doc per book
+  // (_plan for the first book, so data from before books existed keeps working; _plan_<bookId> for the rest).
+  const LOCAL_KEY = "wordring.words", PLAN_KEY = "wordring.plan", PLANS_KEY = "wordring.plans", BOOKS_KEY = "wordring.books";
+  const BOOKS_ID = "_books";
+  const planDocId = b => b === MAIN_BOOK ? "_plan" : "_plan_" + b;
+  let plans = {};   // bookId -> { days, start, round, todayDate, todayQuota }
+  let plan = null;  // the current book's plan
+  let fb = null;    // { auth, db, mod: firebase functions } once Firebase is configured
   let unsub = null;
+
+  // Point words/plan at the current book after data or the selection changes.
+  function applyBook() {
+    if (!books.some(b => b.id === ui.book)) ui.book = books[0].id;
+    words = allWords.filter(w => bookOf(w) === ui.book);
+    plan = plans[ui.book] || null;
+  }
+
   const store = {
     mode: "loading", uid: null,
     ref(id) { return fb.mod.doc(fb.db, "users", this.uid, "words", id); },
@@ -25,30 +42,60 @@
     // so we don't wait for the server (that would hang while offline).
     cloud(p) { p.catch(e => toast(e?.code === "permission-denied" ? "保存する権限がありません。ログインし直してください" : "同期に失敗しました。通信状況を確認してください")); },
     async putPlan(p) {
-      plan = p;
-      if (this.mode === "db") { this.cloud(fb.mod.setDoc(this.ref(PLAN_ID), p)); return; }
-      try { localStorage.setItem(PLAN_KEY, JSON.stringify(p)); } catch {}
-      render();
+      plans = { ...plans, [ui.book]: p }; plan = p;
+      if (this.mode === "db") { this.cloud(fb.mod.setDoc(this.ref(planDocId(ui.book)), p)); return; }
+      this.saveLocal(); render();
+    },
+    async putBooks(list) {
+      books = list;
+      if (this.mode === "db") { this.cloud(fb.mod.setDoc(this.ref(BOOKS_ID), { list })); }
+      else this.saveLocal();
+      applyBook(); render();
     },
     async put(w) {
       const { id, ...body } = w;
       if (this.mode === "db") { this.cloud(fb.mod.setDoc(this.ref(id), body)); return; }
-      const i = words.findIndex(x => x.id === id);
-      if (i >= 0) words[i] = w; else words.push(w);
-      this.saveLocal(); render();
+      const i = allWords.findIndex(x => x.id === id);
+      if (i >= 0) allWords[i] = w; else allWords.push(w);
+      this.saveLocal(); applyBook(); render();
     },
     async del(id) {
       if (this.mode === "db") { this.cloud(fb.mod.deleteDoc(this.ref(id))); return; }
-      words = words.filter(x => x.id !== id); this.saveLocal(); render();
+      allWords = allWords.filter(x => x.id !== id); this.saveLocal(); applyBook(); render();
     },
-    saveLocal() { try { localStorage.setItem(LOCAL_KEY, JSON.stringify(words)); } catch {} },
+    // Removes a book together with its words and plan.
+    async delBook(bookId) {
+      const ids = allWords.filter(w => bookOf(w) === bookId).map(w => w.id);
+      const rest = books.filter(b => b.id !== bookId);
+      if (this.mode === "db") {
+        const refs = [...ids, planDocId(bookId)].map(id => this.ref(id));
+        for (let i = 0; i < refs.length; i += 400) {
+          const b = fb.mod.writeBatch(fb.db);
+          refs.slice(i, i + 400).forEach(r => b.delete(r));
+          this.cloud(b.commit());
+        }
+      } else {
+        allWords = allWords.filter(w => bookOf(w) !== bookId);
+        const { [bookId]: _, ...others } = plans; plans = others;
+      }
+      await this.putBooks(rest);
+    },
+    saveLocal() {
+      try {
+        localStorage.setItem(LOCAL_KEY, JSON.stringify(allWords));
+        localStorage.setItem(PLANS_KEY, JSON.stringify(plans));
+        localStorage.setItem(BOOKS_KEY, JSON.stringify(books));
+      } catch {}
+    },
     readLocal() {
-      let w = [], p = null;
+      let w = [], p = {}, b = null;
       try { w = JSON.parse(localStorage.getItem(LOCAL_KEY) || "[]"); } catch {}
-      try { p = JSON.parse(localStorage.getItem(PLAN_KEY) || "null"); } catch {}
-      return { w, p };
+      try { p = JSON.parse(localStorage.getItem(PLANS_KEY) || "null") || {}; } catch {}
+      try { const old = JSON.parse(localStorage.getItem(PLAN_KEY) || "null"); if (old && !p[MAIN_BOOK]) p[MAIN_BOOK] = old; } catch {}
+      try { b = JSON.parse(localStorage.getItem(BOOKS_KEY) || "null"); } catch {}
+      return { w, p, b: Array.isArray(b) && b.length ? b : null };
     },
-    clearLocal() { try { localStorage.removeItem(LOCAL_KEY); localStorage.removeItem(PLAN_KEY); } catch {} },
+    clearLocal() { try { [LOCAL_KEY, PLAN_KEY, PLANS_KEY, BOOKS_KEY].forEach(k => localStorage.removeItem(k)); } catch {} },
   };
 
   function setSync(on, text) {
@@ -66,21 +113,30 @@
   function useLocal() {
     unsub?.(); unsub = null;
     store.mode = "local"; store.uid = null;
-    ({ w: words, p: plan } = store.readLocal());
+    const { w, p, b } = store.readLocal();
+    allWords = w; plans = p; books = b || [{ id: MAIN_BOOK, name: "マイ単語帳" }];
+    applyBook(); firstData = true;
     setSync(false, fb ? "この端末だけに保存中" : "この端末に保存");
     render();
   }
   function useCloud(uid) {
     unsub?.();
     store.mode = "db"; store.uid = uid;
-    words = []; plan = null; firstData = true;
+    allWords = []; plans = {}; firstData = true;
     setSync(true, "PC・スマホで同期");
     const col = fb.mod.collection(fb.db, "users", uid, "words");
     unsub = fb.mod.onSnapshot(col, snap => {
-      const p = snap.docs.find(d => d.id === PLAN_ID);
-      plan = p ? { ...p.data() } : null;
-      words = snap.docs.filter(d => d.id !== PLAN_ID).map(d => ({ id: d.id, ...d.data() }));
-      render();
+      const nextPlans = {}, nextWords = [];
+      let list = null;
+      snap.docs.forEach(d => {
+        if (d.id === BOOKS_ID) list = d.data().list;
+        else if (d.id === "_plan") nextPlans[MAIN_BOOK] = { ...d.data() };
+        else if (d.id.startsWith("_plan_")) nextPlans[d.id.slice(6)] = { ...d.data() };
+        else nextWords.push({ id: d.id, ...d.data() });
+      });
+      allWords = nextWords; plans = nextPlans;
+      books = Array.isArray(list) && list.length ? list : [{ id: MAIN_BOOK, name: "マイ単語帳" }];
+      applyBook(); render();
     }, () => setSync(false, "同期できません。再読み込みしてください"));
     offerMigration();
   }
@@ -99,7 +155,7 @@
 
   // Words saved on this device before signing in can be moved into the account once.
   function offerMigration() {
-    const { w, p } = store.readLocal();
+    const { w, p, b: localBooks } = store.readLocal();
     if (!w.length) return;
     $("#dlg-host").innerHTML = `<div class="overlay" id="ov"><div class="dlg">
       <h3>この端末の単語をアカウントに移しますか？</h3>
@@ -112,7 +168,14 @@
       for (let i = 0; i < w.length; i += 400) {
         const b = writeBatch(fb.db);
         w.slice(i, i + 400).forEach(({ id, ...body }) => b.set(store.ref(id), body));
-        if (i === 0 && p && !plan) b.set(store.ref(PLAN_ID), p);
+        if (i === 0) {
+          Object.entries(p).forEach(([bookId, bp]) => { if (!plans[bookId]) b.set(store.ref(planDocId(bookId)), bp); });
+          // Add this device's books to the account's list without dropping either side's.
+          if (localBooks) {
+            const merged = [...books, ...localBooks.filter(lb => !books.some(x => x.id === lb.id))];
+            b.set(store.ref(BOOKS_ID), { list: merged });
+          }
+        }
         store.cloud(b.commit());
       }
       store.clearLocal(); closeDlg(); toast(`${w.length} 語を移しました`);
@@ -267,7 +330,7 @@
     if (!en || !ja) { $("#add-msg").className = "msg err"; $("#add-msg").textContent = "英単語と意味の両方を入力してください"; return; }
     if (store.mode === "loading") return;
     const dup = words.find(w => w.en.toLowerCase() === en.toLowerCase());
-    const w = { id: newId(), en, ja, ex: $("#in-ex").value.trim(), tag: $("#in-tag").value.trim(), level: 0, created: Date.now() };
+    const w = { id: newId(), en, ja, ex: $("#in-ex").value.trim(), tag: $("#in-tag").value.trim(), book: ui.book, level: 0, created: Date.now() };
     try { await save(w); } catch { return; }
     $("#add-msg").className = "msg";
     $("#add-msg").textContent = dup ? `「${en}」を追加しました（同じ単語がすでにあります）` : `「${en}」を追加しました`;
@@ -339,7 +402,7 @@
     ];
     const now = Date.now();
     for (let i = 0; i < s.length; i++) {
-      try { await save({ id: newId(), en: s[i][0], ja: s[i][1], ex: s[i][2], tag: "サンプル", level: 0, created: now - i }); } catch { return; }
+      try { await save({ id: newId(), en: s[i][0], ja: s[i][1], ex: s[i][2], tag: "サンプル", book: ui.book, level: 0, created: now - i }); } catch { return; }
     }
     toast("サンプルを追加しました");
   }
@@ -353,6 +416,7 @@
       <label class="f">意味<input type="text" id="ed-ja" value="${esc(w.ja)}" required></label>
       <label class="f">例文<input type="text" id="ed-ex" value="${esc(w.ex)}"></label>
       <label class="f">タグ<input type="text" id="ed-tag" value="${esc(w.tag)}"></label>
+      ${books.length > 1 ? `<label class="f">本<select id="ed-book">${books.map(b => `<option value="${esc(b.id)}" ${b.id === bookOf(w) ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label>` : ""}
       <div class="actions">
         <button class="btn primary" type="submit">保存</button>
         <button class="btn ghost" type="button" id="ed-cancel">キャンセル</button>
@@ -372,8 +436,11 @@
     $("#ed").onsubmit = async e => {
       e.preventDefault();
       const en = $("#ed-en").value.trim(), ja = $("#ed-ja").value.trim(); if (!en || !ja) return;
-      try { await save({ ...w, en, ja, ex: $("#ed-ex").value.trim(), tag: $("#ed-tag").value.trim() }); } catch { return; }
-      closeDlg(); toast("保存しました");
+      const book = $("#ed-book")?.value || bookOf(w);
+      // Progress belongs to a book's plan, so a moved word starts fresh in its new book.
+      const moved = book !== bookOf(w) ? { seenRound: null, seenDate: null } : {};
+      try { await save({ ...w, en, ja, ex: $("#ed-ex").value.trim(), tag: $("#ed-tag").value.trim(), book, ...moved }); } catch { return; }
+      closeDlg(); toast(moved.seenDate === null ? `「${books.find(b => b.id === book)?.name}」に移しました` : "保存しました");
     };
   }
 
@@ -396,7 +463,7 @@
       const now = Date.now();
       for (let i = 0; i < rows.length; i++) {
         $("#im-msg").textContent = `${i + 1} / ${rows.length} 件を追加中…`;
-        try { await save({ id: newId(), en: rows[i][0], ja: rows[i][1], ex: rows[i].slice(2).join(", "), tag, level: 0, created: now - i }); }
+        try { await save({ id: newId(), en: rows[i][0], ja: rows[i][1], ex: rows[i].slice(2).join(", "), tag, book: ui.book, level: 0, created: now - i }); }
         catch { btn.disabled = false; return; }
       }
       closeDlg(); toast(`${rows.length} 件を追加しました`);
@@ -564,6 +631,83 @@
     $("#next")?.addEventListener("click", () => { quiz.i++; quiz.picked = null; quiz.opts = null; renderQuiz(); });
   }
 
+  // ---------- books ----------
+  function switchBook(id) {
+    if (id === ui.book) return;
+    ui.book = id; ui.tag = ""; saveUi();
+    planEdit = false; draftDays = null; quiz = null;
+    $("#add-msg").textContent = ""; $("#q").value = ""; ui.q = "";
+    applyBook(); render();
+    if (ui.view === "study") startStudy();
+    if (ui.view === "quiz") startQuiz();
+  }
+  function renderBooks() {
+    const host = $("#bookbar");
+    if (store.mode === "loading") { host.innerHTML = ""; return; }
+    const count = id => allWords.filter(w => bookOf(w) === id).length;
+    host.innerHTML = `<div class="books" role="tablist" aria-label="本">${books.map(b => `
+        <button class="book-chip" role="tab" data-id="${esc(b.id)}" aria-selected="${b.id === ui.book}">
+          <span class="book-name">${esc(b.name)}</span><span class="book-count">${count(b.id)}</span></button>`).join("")}
+        <button class="book-chip add" id="book-add" aria-label="本を追加">＋ 本を追加</button>
+      </div>
+      <button class="icon-btn" id="book-manage" aria-label="本の名前変更・削除" title="本の名前変更・削除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>`;
+    host.querySelectorAll(".book-chip[data-id]").forEach(b => b.onclick = () => switchBook(b.dataset.id));
+    $("#book-add").onclick = openAddBook;
+    $("#book-manage").onclick = openManageBooks;
+    host.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+  function openAddBook() {
+    $("#dlg-host").innerHTML = `<div class="overlay" id="ov"><form class="dlg" id="bk" autocomplete="off">
+      <h3>本を追加</h3>
+      <p class="msg" style="margin:0">単語集や教科書ごとに分けて登録できます。1日の単語数の計画も本ごとに立てられます。</p>
+      <label class="f">本の名前<input type="text" id="bk-name" placeholder="例: ターゲット1900、英検2級 でる順" maxlength="40" required></label>
+      <div class="actions"><button class="btn primary" type="submit">追加する</button><button class="btn ghost" type="button" id="bk-cancel">キャンセル</button></div>
+    </form></div>`;
+    $("#ov").onclick = e => { if (e.target.id === "ov") closeDlg(); };
+    $("#bk-cancel").onclick = closeDlg;
+    $("#bk-name").focus();
+    $("#bk").onsubmit = async e => {
+      e.preventDefault();
+      const name = $("#bk-name").value.trim(); if (!name) return;
+      const id = "b" + newId();
+      closeDlg();
+      await store.putBooks([...books, { id, name }]);
+      switchBook(id);
+      toast(`「${name}」を追加しました`);
+    };
+  }
+  function openManageBooks() {
+    const count = id => allWords.filter(w => bookOf(w) === id).length;
+    $("#dlg-host").innerHTML = `<div class="overlay" id="ov"><form class="dlg" id="bm" autocomplete="off">
+      <h3>本の名前変更・削除</h3>
+      <div class="book-rows">${books.map(b => `
+        <div class="book-row" data-id="${esc(b.id)}">
+          <input type="text" value="${esc(b.name)}" maxlength="40" aria-label="本の名前" required>
+          <span class="msg">${count(b.id)} 語</span>
+          ${books.length > 1 ? `<button class="btn danger sm" type="button" data-del>削除</button>` : ""}
+        </div>`).join("")}</div>
+      <p class="msg" style="margin:0">本を削除すると、その本の単語と計画もすべて消えます。元に戻せません。</p>
+      <div class="actions"><button class="btn primary" type="submit">名前を保存</button><button class="btn ghost" type="button" id="bm-cancel">閉じる</button></div>
+    </form></div>`;
+    $("#ov").onclick = e => { if (e.target.id === "ov") closeDlg(); };
+    $("#bm-cancel").onclick = closeDlg;
+    $("#bm").querySelectorAll("[data-del]").forEach(btn => btn.onclick = async () => {
+      const id = btn.closest(".book-row").dataset.id, bk = books.find(b => b.id === id);
+      if (!btn.classList.contains("armed")) { btn.classList.add("armed"); btn.textContent = `${count(id)} 語ごと削除`; return; }
+      closeDlg();
+      if (ui.book === id) switchBook(books.find(b => b.id !== id).id);
+      await store.delBook(id);
+      toast(`「${bk.name}」を削除しました`);
+    });
+    $("#bm").onsubmit = async e => {
+      e.preventDefault();
+      const names = Object.fromEntries([...$("#bm").querySelectorAll(".book-row")].map(r => [r.dataset.id, r.querySelector("input").value.trim()]));
+      const next = books.map(b => ({ ...b, name: names[b.id] || b.name }));
+      closeDlg();
+      if (next.some((b, i) => b.name !== books[i].name)) { await store.putBooks(next); toast("保存しました"); }
+    };
+  }
+
   // ---------- render ----------
   let firstData = true;
   function render() {
@@ -571,7 +715,7 @@
     ["list", "study", "quiz"].forEach(v => $("#view-" + v).hidden = v !== ui.view);
     syncSegs();
     ensureToday();
-    renderPlan(); renderStats(); renderList();
+    renderBooks(); renderPlan(); renderStats(); renderList();
     if (store.mode !== "loading" && firstData) { firstData = false; startStudy(); quiz = null; }
     if (ui.view === "study") renderStudy();
     if (ui.view === "quiz") renderQuiz();

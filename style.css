@@ -194,3 +194,18 @@ html { padding-top: env(safe-area-inset-top, 0px); }
 body { margin: 0; -webkit-tap-highlight-color: transparent; }
 .account-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .btn.sm { padding: 6px 12px; font-size: 13px; }
+
+/* books */
+.bookbar { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bookbar:empty { display: none; }
+.books { display: flex; gap: 8px; overflow-x: auto; flex: 1; min-width: 0; padding: 2px; scrollbar-width: none; }
+.books::-webkit-scrollbar { display: none; }
+.book-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 8px 12px; cursor: pointer; font-weight: 500; font-size: 14px; max-width: 220px; }
+.book-chip .book-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.book-chip .book-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.book-chip[aria-selected="true"] { background: var(--ink); color: var(--card); border-color: var(--ink); }
+.book-chip[aria-selected="true"] .book-count { color: var(--card); opacity: .7; }
+.book-chip.add { border-style: dashed; color: var(--muted); background: none; }
+.book-rows { display: grid; gap: 8px; }
+.book-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
+.btn.danger.sm.armed { white-space: nowrap; }
