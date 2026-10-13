@@ -502,26 +502,61 @@
     };
   }
 
+  // One line of the bulk list -> [en, ja, ex].
+  // Tab-separated (pasted from a spreadsheet): columns as they are, so commas inside a cell stay.
+  // Otherwise the first comma splits the word from its meaning; later commas belong to the meaning
+  // (e.g. "run, 走る, 運営する"), and the example starts at the first part with no Japanese in it.
+  // "|" can also be used to mark where the example starts.
+  const HAS_JA = /[\u3040-\u30ff\u3400-\u9fff\uff01-\uff5e]/;
+  function parseLine(line) {
+    if (line.includes("\t")) {
+      const c = line.split("\t").map(x => x.trim());
+      return [c[0], c[1], c.slice(2).filter(Boolean).join(" ")];
+    }
+    const m = line.match(/^([^,，]*)[,，](.*)$/);
+    if (!m) return [line.trim(), "", ""];
+    const en = m[1].trim();
+    let rest = m[2], ex = "";
+    const bar = rest.search(/[|｜]/);
+    if (bar >= 0) { ex = rest.slice(bar + 1).trim(); rest = rest.slice(0, bar); }
+    else {
+      const parts = rest.split(/[,，]/);
+      const i = parts.findIndex((x, j) => j > 0 && /[a-z]/i.test(x) && !HAS_JA.test(x));
+      if (i > 0) { ex = parts.slice(i).join(",").trim(); rest = parts.slice(0, i).join(","); }
+    }
+    const ja = rest.split(/[,，]/).map(x => x.trim()).filter(Boolean).join(", ");
+    return [en, ja, ex];
+  }
+
   $("#open-import").onclick = () => {
     $("#dlg-host").innerHTML = `<div class="overlay" id="ov"><form class="dlg" id="im">
       <h3>まとめて追加</h3>
-      <p class="msg" style="margin:0">1行に1単語。英単語と意味を「,」かタブで区切ります。3つ目に例文も書けます。Excel やスプレッドシートからそのまま貼り付けられます。</p>
-      <label class="f">単語リスト<textarea id="im-text" placeholder="apple, りんご&#10;borrow, 借りる, Can I borrow your pen?&#10;curious, 好奇心の強い"></textarea></label>
+      <p class="msg" style="margin:0">1行に1単語。最初の「,」で英単語と意味を分けます。意味はいくつ「,」で並べても大丈夫です。例文は意味のあとに英文で続けて書けます。Excel やスプレッドシートからそのまま貼り付けることもできます。</p>
+      <label class="f">単語リスト<textarea id="im-text" placeholder="apple, りんご&#10;run, 走る, 運営する, 流れる&#10;borrow, 借りる, Can I borrow your pen?"></textarea></label>
+      <div class="im-preview" id="im-preview" hidden></div>
       <label class="f">タグ（任意・全部に付きます）<input type="text" id="im-tag" placeholder="例: 第5章"></label>
       <div class="actions"><button class="btn primary" type="submit">追加する</button><button class="btn ghost" type="button" id="im-cancel">キャンセル</button></div>
       <div class="msg" id="im-msg"></div></form></div>`;
     $("#ov").onclick = e => { if (e.target.id === "ov") closeDlg(); };
     $("#im-cancel").onclick = closeDlg;
+    const parseAll = () => $("#im-text").value.split(/\r?\n/).filter(l => l.trim()).map(parseLine);
+    $("#im-text").oninput = () => {
+      const rows = parseAll(), ok = rows.filter(r => r[0] && r[1]), bad = rows.length - ok.length;
+      const box = $("#im-preview"); box.hidden = !rows.length;
+      box.innerHTML = `<div class="msg">${ok.length} 語を読み取りました${bad ? `（意味がない ${bad} 行は追加しません）` : ""}。最初の ${Math.min(3, ok.length)} 語：</div>
+        <table><thead><tr><th>英単語</th><th>意味</th><th>例文</th></tr></thead><tbody>${ok.slice(0, 3).map(r =>
+          `<tr><td class="en">${esc(r[0])}</td><td>${esc(r[1])}</td><td class="ex">${esc(r[2]) || "—"}</td></tr>`).join("")}</tbody></table>`;
+    };
     $("#im").onsubmit = async e => {
       e.preventDefault();
       const tag = $("#im-tag").value.trim();
-      const rows = $("#im-text").value.split(/\r?\n/).map(l => l.split(/\t|,|，/).map(s => s.trim())).filter(r => r[0] && r[1]);
+      const rows = parseAll().filter(r => r[0] && r[1]);
       if (!rows.length) { $("#im-msg").className = "msg err"; $("#im-msg").textContent = "「英単語, 意味」の形の行が見つかりません"; return; }
       const btn = e.submitter || $("#im button[type=submit]"); btn.disabled = true;
       const now = Date.now();
       for (let i = 0; i < rows.length; i++) {
         $("#im-msg").textContent = `${i + 1} / ${rows.length} 件を追加中…`;
-        try { await save({ id: newId(), en: rows[i][0], ja: rows[i][1], ex: rows[i].slice(2).join(", "), tag, book: ui.book, level: 0, created: now + i }); }
+        try { await save({ id: newId(), en: rows[i][0], ja: rows[i][1], ex: rows[i][2], tag, book: ui.book, level: 0, created: now + i }); }
         catch { btn.disabled = false; return; }
       }
       closeDlg(); toast(`${rows.length} 件を追加しました`);

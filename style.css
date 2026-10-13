@@ -229,3 +229,11 @@ details.sched summary { cursor: pointer; font-size: 13px; opacity: .85; }
 .sched tr.today td { font-weight: 700; }
 .sched .btn.sm { padding: 3px 10px; font-size: 12px; }
 .w-en .no { font-family: var(--f-ui); font-size: 11px; font-weight: 400; color: var(--muted); min-width: 2.2em; font-variant-numeric: tabular-nums; }
+
+/* bulk import preview */
+.im-preview { display: grid; gap: 6px; overflow-x: auto; }
+.im-preview table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.im-preview th { text-align: left; font-weight: 500; color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.im-preview td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.im-preview td.en { font-family: var(--f-word); font-weight: 700; white-space: nowrap; }
+.im-preview td.ex { font-family: var(--f-word); font-style: italic; color: var(--muted); }
