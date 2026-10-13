@@ -32,7 +32,7 @@
   function applyBook() {
     if (!books.some(b => b.id === ui.book)) ui.book = books[0].id;
     words = allWords.filter(w => bookOf(w) === ui.book);
-    plan = plans[ui.book] || null;
+    plan = normPlan(plans[ui.book]);
   }
 
   const store = {
@@ -221,102 +221,159 @@
     catch (e) { toast(e?.code === "quota_exceeded" ? "保存できる上限に達しました。不要な単語を削除してください" : "保存できませんでした。もう一度試してください"); throw e; }
   }
 
-  // ---------- plan: finish one round in N days ----------
+  // ---------- plan: words No.from–to spread over start–end dates, a fixed share per day ----------
+  // Each day's words are fixed in advance. A day you skip is simply skipped (its words are not
+  // pushed onto later days); you can still open any day from the schedule and do it.
   const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
   const toUTC = s => { const [y, m, d] = s.split("-").map(Number); return Date.UTC(y, m - 1, d); };
   const dayDiff = (a, b) => Math.round((toUTC(b) - toUTC(a)) / 86400000);
-  const addDays = (s, n) => { const d = new Date(toUTC(s) + n * 86400000); return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日`; };
-  const seenInRound = w => plan && w.seenRound === plan.round;
-  const seenToday = w => seenInRound(w) && w.seenDate === todayStr();
+  const shiftDate = (s, n) => new Date(toUTC(s) + n * 86400000).toISOString().slice(0, 10);
+  const fmtDate = s => { const d = new Date(toUTC(s)); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
+  const dow = s => "日月火水木金土"[new Date(toUTC(s)).getUTCDay()];
+  const fmtDay = s => `${fmtDate(s)}(${dow(s)})`;
+  const rangeText = (a, b) => a > b ? "なし" : a === b ? `No.${a}` : `No.${a}〜${b}`;
 
-  function quotaFor(p, base) {
-    const daysLeft = Math.max(1, p.days - dayDiff(p.start, todayStr()));
-    return Math.ceil(base / daysLeft);
+  // Registration order gives every word in a book its No.
+  function ordered(list = words) { return list.slice().sort((a, b) => (a.created || 0) - (b.created || 0) || (a.id < b.id ? -1 : 1)); }
+
+  // Plans saved before date ranges existed ("finish in N days") become a range over the whole book.
+  function normPlan(p) {
+    if (!p) return null;
+    if (p.end) return p;
+    const start = p.start || todayStr();
+    return { id: "p" + start, start, end: shiftDate(start, Math.max(1, p.days || 14) - 1), from: 1, to: null };
   }
-  function planInfo() {
-    const total = words.length;
-    const done = words.filter(seenInRound).length;
-    const doneToday = words.filter(seenToday).length;
-    const left = total - done;
-    const elapsed = dayDiff(plan.start, todayStr());
-    const daysLeft = plan.days - elapsed;
-    const quota = plan.todayDate === todayStr() ? plan.todayQuota : quotaFor(plan, left + doneToday);
-    return { total, done, doneToday, left, daysLeft, overdue: daysLeft <= 0, quota, end: addDays(plan.start, plan.days - 1), todayLeft: Math.max(0, quota - doneToday) };
+  function scheduleFor(p, list = words) {
+    const all = ordered(list);
+    const from = Math.max(1, p.from || 1);
+    const to = Math.min(all.length, p.to || all.length);
+    const range = to >= from ? all.slice(from - 1, to) : [];
+    const days = Math.max(1, dayDiff(p.start, p.end) + 1);
+    const N = range.length;
+    const day = k => {
+      const a = Math.floor(k * N / days), b = Math.floor((k + 1) * N / days);
+      return { k, date: shiftDate(p.start, k), from: from + a, to: from + b - 1, words: range.slice(a, b) };
+    };
+    return { from, to, N, days, day, today: dayDiff(p.start, todayStr()) };
   }
-  let ensuring = false;
-  function ensureToday() {
-    if (store.mode === "loading" || !plan || plan.todayDate === todayStr() || ensuring) return;
-    ensuring = true;
-    const left = words.filter(w => !seenInRound(w)).length;
-    store.putPlan({ ...plan, todayDate: todayStr(), todayQuota: quotaFor(plan, left) }).catch(() => {}).finally(() => ensuring = false);
-  }
+  const schedule = () => scheduleFor(plan);
+  // The day "今日の分" points at: today, or day 1 before the plan starts.
+  const currentDay = s => Math.min(Math.max(s.today, 0), s.days - 1);
+  const studied = w => !!plan && w.seenPlan === plan.id;
   function markSeen(w) {
-    return plan && w.seenRound !== plan.round ? { ...w, seenRound: plan.round, seenDate: todayStr() } : w;
+    return plan && w.seenPlan !== plan.id ? { ...w, seenPlan: plan.id, seenDate: todayStr() } : w;
   }
 
-  let planEdit = false, draftDays = null;
+  let planEdit = false, freshPlan = false, schedOpen = false;
   function renderPlan() {
     const host = $("#plan-host");
     if (store.mode === "loading" || !words.length) { host.innerHTML = ""; return; }
-    if (!plan || planEdit) {
-      const left = plan ? words.filter(w => !seenInRound(w)).length : words.length;
-      const d = Math.max(1, Math.min(365, parseInt(draftDays ?? plan?.days ?? 14, 10) || 1));
-      const per = Math.ceil(left / d);
-      host.innerHTML = `<form class="plan setup" id="plan-form">
-        <div class="section-h">${plan ? "残り何日で一周する？" : "何日で一周する？"}</div>
-        <div class="days-row">
-          <input type="number" id="plan-days" min="1" max="365" value="${d}" inputmode="numeric" aria-label="日数"> <span>日</span>
-          ${[3, 7, 14, 30].map(n => `<button type="button" class="preset" data-d="${n}" aria-pressed="${n === d}">${n}日</button>`).join("")}
-        </div>
-        <div class="calc">${plan ? "残り" : "全"} <b>${left}</b> 語 ÷ <b>${d}</b> 日 → 1日 <b>${per}</b> 語　<span class="msg">${addDays(todayStr(), d - 1)}に一周</span></div>
-        <div class="actions"><button class="btn primary" type="submit">${plan ? "この日数で計算し直す" : "この計画で始める"}</button>
-          ${plan ? `<button class="btn ghost" type="button" id="plan-cancel">キャンセル</button>` : ""}</div>
-        <div class="msg">単語を後から追加しても、次の日から自動で割り振り直します。</div>
-      </form>`;
-      const setDays = v => { draftDays = v; renderPlan(); const i = $("#plan-days"); i.focus(); i.setSelectionRange?.(9, 9); };
-      $("#plan-days").oninput = e => { draftDays = e.target.value; const v = Math.max(1, Math.min(365, parseInt(e.target.value, 10) || 1)); $(".calc", host).innerHTML = `${plan ? "残り" : "全"} <b>${left}</b> 語 ÷ <b>${v}</b> 日 → 1日 <b>${Math.ceil(left / v)}</b> 語　<span class="msg">${addDays(todayStr(), v - 1)}に一周</span>`; host.querySelectorAll(".preset").forEach(b => b.setAttribute("aria-pressed", +b.dataset.d === v)); };
-      host.querySelectorAll(".preset").forEach(b => b.onclick = () => setDays(b.dataset.d));
-      $("#plan-cancel")?.addEventListener("click", () => { planEdit = false; draftDays = null; renderPlan(); });
-      $("#plan-form").onsubmit = async e => {
-        e.preventDefault();
-        const days = Math.max(1, Math.min(365, parseInt($("#plan-days").value, 10) || 1));
-        const doneToday = plan ? words.filter(seenToday).length : 0;
-        const p = { days, start: todayStr(), round: plan?.round || 1, todayDate: todayStr() };
-        p.todayQuota = quotaFor(p, left + doneToday) ;
-        planEdit = false; draftDays = null;
-        try { await store.putPlan(p); } catch { toast("保存できませんでした"); return; }
-        toast(`1日 ${p.todayQuota} 語で計画しました`); render();
-      };
-      return;
+    if (!plan || planEdit) return renderPlanForm(host);
+    const s = schedule();
+    const head = `<div class="eyebrow"><span>${fmtDay(plan.start)}〜${fmtDay(plan.end)} · ${s.days}日間</span><span>${rangeText(s.from, s.to)} · ${s.N}語</span></div>`;
+    let body, actions;
+    if (s.today >= s.days) {
+      const done = s.N ? Array.from({ length: s.days }, (_, k) => s.day(k).words.filter(studied).length).reduce((a, b) => a + b, 0) : 0;
+      body = `<div class="goal"><b>期間終了</b><span>${done} / ${s.N} 語やりました</span></div>`;
+      actions = `<button class="btn" id="plan-new">新しい計画を立てる</button>`;
+    } else {
+      const k = currentDay(s), d = s.day(k), n = d.words.length, done = d.words.filter(studied).length;
+      const pct = n ? Math.round(done / n * 100) : 100;
+      const label = s.today < 0 ? `${fmtDay(plan.start)}から開始 · 1日目の分` : `今日 ${fmtDay(d.date)} · ${k + 1}日目`;
+      const next = k + 1 < s.days ? s.day(k + 1) : null;
+      let skipped = 0;
+      for (let j = 0; j < Math.min(s.today, s.days); j++) skipped += s.day(j).words.filter(w => !studied(w)).length;
+      body = `<div class="sub">${label}</div>
+        ${n ? `<div class="goal"><b>${done}<span style="font-size:22px;opacity:.6"> / ${n}</span></b><span>${rangeText(d.from, d.to)}${done >= n ? " · 完了" : ""}</span></div>
+        <div class="meter"><div style="width:${pct}%"></div></div>`
+          : `<div class="goal"><b>0</b><span>この日の割り当てはありません</span></div>`}
+        ${next ? `<div class="sub">明日 ${fmtDay(next.date)}：${rangeText(next.from, next.to)}（${next.words.length}語）</div>` : `<div class="sub">今日が最終日です</div>`}
+        ${skipped ? `<div class="sub">前の日のやり残し ${skipped} 語はスキップしました。日程からいつでもできます。</div>` : ""}`;
+      actions = n ? `<button class="btn" id="plan-go">${done >= n ? "今日の分をもう一度" : "今日の分を始める"}</button>` : "";
     }
-    const s = planInfo();
-    if (s.left === 0) {
-      host.innerHTML = `<div class="plan"><div class="eyebrow"><span>第${plan.round}周</span></div>
-        <div class="goal"><b>完了</b><span>${s.total} 語をすべて一周しました</span></div>
-        <div class="actions"><button class="btn" id="plan-next">第${plan.round + 1}周を始める（${plan.days}日）</button><button class="btn ghost" id="plan-edit">日数を変える</button></div></div>`;
-      $("#plan-next").onclick = async () => {
-        const p = { days: plan.days, start: todayStr(), round: plan.round + 1, todayDate: todayStr() };
-        p.todayQuota = quotaFor(p, words.length);
-        try { await store.putPlan(p); } catch { toast("保存できませんでした"); return; }
-        render();
-      };
-      $("#plan-edit").onclick = () => { planEdit = true; renderPlan(); };
-      return;
-    }
-    const pct = s.quota ? Math.min(100, Math.round(s.doneToday / s.quota * 100)) : 100;
-    const met = s.doneToday >= s.quota;
-    host.innerHTML = `<div class="plan">
-      <div class="eyebrow"><span>第${plan.round}周 · ${s.overdue ? "期限を過ぎています" : `${s.end}まで あと${s.daysLeft}日`}</span><span>この周 ${s.done} / ${s.total} 語</span></div>
-      <div class="goal"><b>${Math.min(s.doneToday, s.quota)}<span style="font-size:22px;opacity:.6"> / ${s.quota}</span></b><span>${met ? "今日の分は完了" : `今日の単語 あと ${s.todayLeft} 語`}</span></div>
-      <div class="meter"><div style="width:${pct}%"></div></div>
-      ${s.overdue ? `<div class="sub">残り ${s.left} 語を終えると一周です。日数を変えて計画し直すこともできます。</div>`
-        : met ? `<div class="sub">先に進めておくと、明日からの1日の数が減ります。</div>` : ""}
-      <div class="actions">${met && s.doneToday ? `<button class="btn" id="plan-review">今日の分をもう一度</button>` : ""}<button class="btn ${met ? "ghost" : ""}" id="plan-go">${met ? "明日の分も進める" : "今日の分を始める"}</button><button class="btn ghost" id="plan-edit">日数を変える</button></div>
+    host.innerHTML = `<div class="plan">${head}${body}
+      <div class="actions">${actions}<button class="btn ghost" id="plan-edit">計画を変える</button></div>
+      <details class="sched" ${schedOpen ? "open" : ""}><summary>日程を見る</summary><div class="sched-scroll"><table>
+        <thead><tr><th>日付</th><th>範囲</th><th>語数</th><th>やった</th><th></th></tr></thead><tbody>
+        ${Array.from({ length: s.days }, (_, k) => {
+          const d = s.day(k), n = d.words.length, done = d.words.filter(studied).length;
+          const cls = k === s.today ? "today" : k < s.today ? "past" : "";
+          return `<tr class="${cls}"><td>${fmtDay(d.date)}${k === s.today ? " 今日" : ""}</td><td>${n ? rangeText(d.from, d.to) : "—"}</td><td>${n}</td>
+            <td>${n ? (done >= n ? "✓" : `${done}/${n}`) : ""}</td><td>${n ? `<button class="btn sm" data-k="${k}">やる</button>` : ""}</td></tr>`;
+        }).join("")}</tbody></table></div></details>
     </div>`;
-    const goStudy = arg => { ui.view = "study"; ui.studySet = "today"; saveUi(); render(); startStudy(arg); };
-    $("#plan-go").onclick = () => goStudy(met);
-    $("#plan-review")?.addEventListener("click", () => goStudy("review"));
-    $("#plan-edit").onclick = () => { planEdit = true; renderPlan(); };
+    const goStudy = arg => { ui.view = "study"; ui.studySet = "today"; saveUi(); render(); startStudy(arg); window.scrollTo(0, 0); };
+    $("#plan-go")?.addEventListener("click", () => { const s2 = schedule(), d = s2.day(currentDay(s2)); goStudy({ all: d.words.every(studied) }); });
+    $("#plan-new")?.addEventListener("click", () => { planEdit = true; freshPlan = true; renderPlan(); });
+    $("#plan-edit").onclick = () => { planEdit = true; freshPlan = false; renderPlan(); };
+    const det = host.querySelector("details.sched");
+    det.ontoggle = () => { schedOpen = det.open; };
+    det.querySelectorAll("button[data-k]").forEach(b => b.onclick = () => goStudy({ day: +b.dataset.k }));
+  }
+
+  function renderPlanForm(host) {
+    const total = words.length;
+    const base = plan && !freshPlan ? plan : null;
+    const start0 = base?.start || todayStr();
+    const end0 = base?.end || shiftDate(start0, 13);
+    const from0 = base?.from || 1, to0 = base?.to || total, toEnd0 = base ? !base.to : true;
+    host.innerHTML = `<form class="plan setup" id="plan-form" novalidate>
+      <div class="section-h">${base ? "計画を変える" : "いつまでに、どの単語をやる？"}</div>
+      <div class="pf-row"><span class="pf-label">期間</span>
+        <input type="date" id="pf-start" value="${start0}" aria-label="開始日"><span>〜</span><input type="date" id="pf-end" value="${end0}" aria-label="終了日">
+      </div>
+      <div class="days-row">${[[7, "1週間"], [14, "2週間"], [30, "30日"], [60, "60日"]].map(([n, t]) => `<button type="button" class="preset" data-d="${n}">${t}</button>`).join("")}</div>
+      <div class="pf-row"><span class="pf-label">単語</span>
+        No.<input type="number" id="pf-from" min="1" max="${total}" value="${Math.min(from0, total)}" inputmode="numeric" aria-label="最初の番号">
+        <span>〜</span>No.<input type="number" id="pf-to" min="1" max="${total}" value="${Math.min(to0, total)}" inputmode="numeric" aria-label="最後の番号" ${toEnd0 ? "disabled" : ""}>
+      </div>
+      <label class="pf-check"><input type="checkbox" id="pf-toend" ${toEnd0 ? "checked" : ""}> 最後の単語まで（あとで追加した単語も入れる）</label>
+      <div class="calc" id="pf-calc"></div>
+      <div class="pf-preview" id="pf-preview"></div>
+      <div class="msg err" id="pf-err"></div>
+      <div class="actions"><button class="btn primary" type="submit">${base ? "この計画に変える" : "この計画で始める"}</button>
+        ${plan ? `<button class="btn ghost" type="button" id="plan-cancel">キャンセル</button>` : ""}</div>
+      <div class="msg">番号は単語を登録した順です。毎日やる単語は最初に決まり、やらなかった日の分は次の日に回さずスキップします。</div>
+    </form>`;
+    const read = () => {
+      const start = $("#pf-start").value, end = $("#pf-end").value;
+      const from = parseInt($("#pf-from").value, 10), toEnd = $("#pf-toend").checked;
+      const to = toEnd ? total : parseInt($("#pf-to").value, 10);
+      let err = "";
+      if (!start || !end) err = "開始日と終了日を入れてください";
+      else if (end < start) err = "終了日は開始日より後にしてください";
+      else if (!(from >= 1 && from <= total)) err = `最初の番号は 1〜${total} にしてください`;
+      else if (!(to >= from && to <= total)) err = `最後の番号は ${from || 1}〜${total} にしてください`;
+      return { start, end, from, to: toEnd ? null : to, err };
+    };
+    const update = () => {
+      const f = read();
+      $("#pf-to").disabled = $("#pf-toend").checked;
+      if ($("#pf-toend").checked) $("#pf-to").value = total;
+      $("#pf-err").textContent = f.err;
+      if (f.err) { $("#pf-calc").innerHTML = ""; $("#pf-preview").innerHTML = ""; return; }
+      const s = scheduleFor(f);
+      const lo = Math.floor(s.N / s.days), hi = Math.ceil(s.N / s.days);
+      $("#pf-calc").innerHTML = `<b>${s.N}</b> 語 ÷ <b>${s.days}</b> 日 → 1日 <b>${lo === hi ? lo : `${lo}〜${hi}`}</b> 語`;
+      $("#pf-preview").innerHTML = Array.from({ length: Math.min(3, s.days) }, (_, k) => {
+        const d = s.day(k); return `<div>${fmtDay(d.date)}　${d.words.length ? rangeText(d.from, d.to) : "なし"}（${d.words.length}語）</div>`;
+      }).join("") + (s.days > 3 ? `<div>…　${fmtDay(f.end)}まで</div>` : "");
+      host.querySelectorAll(".preset").forEach(b => b.setAttribute("aria-pressed", dayDiff(f.start, f.end) + 1 === +b.dataset.d));
+    };
+    host.querySelectorAll("input").forEach(i => i.addEventListener("input", update));
+    host.querySelectorAll(".preset").forEach(b => b.onclick = () => { $("#pf-end").value = shiftDate($("#pf-start").value || todayStr(), +b.dataset.d - 1); update(); });
+    $("#plan-cancel")?.addEventListener("click", () => { planEdit = false; renderPlan(); });
+    $("#plan-form").onsubmit = async e => {
+      e.preventDefault();
+      const f = read(); if (f.err) { update(); return; }
+      // Editing keeps the plan's id so words already done stay marked as done.
+      const p = { id: base?.id || "p" + newId(), start: f.start, end: f.end, from: f.from, to: f.to };
+      planEdit = false; freshPlan = false;
+      await store.putPlan(p);
+      const s = scheduleFor(p), lo = Math.floor(s.N / s.days), hi = Math.ceil(s.N / s.days);
+      toast(`1日 ${lo === hi ? lo : `${lo}〜${hi}`} 語の計画にしました`); render();
+    };
+    update();
   }
 
   // ---------- tabs ----------
@@ -374,9 +431,10 @@
     }
     const list = filtered();
     if (!list.length) { host.innerHTML = `<div class="empty"><p>「${esc(ui.q)}」に一致する単語はありません。</p></div>`; return; }
+    const no = new Map(ordered().map((w, i) => [w.id, i + 1]));
     host.innerHTML = `<ul class="words ${ui.sheet ? "sheet-on" : ""}">` + list.map(w => `
       <li data-id="${w.id}">
-        <div class="w-en">${esc(w.en)}${w.tag ? ` <span class="tag">${esc(w.tag)}</span>` : ""}</div>
+        <div class="w-en"><span class="no">${no.get(w.id)}</span>${esc(w.en)}${w.tag ? ` <span class="tag">${esc(w.tag)}</span>` : ""}</div>
         <div class="w-meta">${lvDots(w.level || 0)}
           <button class="icon-btn" data-act="speak" aria-label="${esc(w.en)} を読み上げ">${ICON_SPEAK}</button>
           <button class="icon-btn" data-act="edit" aria-label="${esc(w.en)} を編集">${ICON_EDIT}</button></div>
@@ -402,7 +460,7 @@
     ];
     const now = Date.now();
     for (let i = 0; i < s.length; i++) {
-      try { await save({ id: newId(), en: s[i][0], ja: s[i][1], ex: s[i][2], tag: "サンプル", book: ui.book, level: 0, created: now - i }); } catch { return; }
+      try { await save({ id: newId(), en: s[i][0], ja: s[i][1], ex: s[i][2], tag: "サンプル", book: ui.book, level: 0, created: now + i }); } catch { return; }
     }
     toast("サンプルを追加しました");
   }
@@ -438,7 +496,7 @@
       const en = $("#ed-en").value.trim(), ja = $("#ed-ja").value.trim(); if (!en || !ja) return;
       const book = $("#ed-book")?.value || bookOf(w);
       // Progress belongs to a book's plan, so a moved word starts fresh in its new book.
-      const moved = book !== bookOf(w) ? { seenRound: null, seenDate: null } : {};
+      const moved = book !== bookOf(w) ? { seenPlan: null, seenDate: null } : {};
       try { await save({ ...w, en, ja, ex: $("#ed-ex").value.trim(), tag: $("#ed-tag").value.trim(), book, ...moved }); } catch { return; }
       closeDlg(); toast(moved.seenDate === null ? `「${books.find(b => b.id === book)?.name}」に移しました` : "保存しました");
     };
@@ -463,7 +521,7 @@
       const now = Date.now();
       for (let i = 0; i < rows.length; i++) {
         $("#im-msg").textContent = `${i + 1} / ${rows.length} 件を追加中…`;
-        try { await save({ id: newId(), en: rows[i][0], ja: rows[i][1], ex: rows[i].slice(2).join(", "), tag, book: ui.book, level: 0, created: now - i }); }
+        try { await save({ id: newId(), en: rows[i][0], ja: rows[i][1], ex: rows[i].slice(2).join(", "), tag, book: ui.book, level: 0, created: now + i }); }
         catch { btn.disabled = false; return; }
       }
       closeDlg(); toast(`${rows.length} 件を追加しました`);
@@ -481,44 +539,38 @@
       $("#" + id).querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === ui[k])));
   }
   segBind("study-dir", "studyDir", () => { study.flipped = false; renderStudy(); });
-  segBind("study-set", "studySet", startStudy);
+  segBind("study-set", "studySet", () => { study.day = null; startStudy(); });
   segBind("quiz-dir", "quizDir", startQuiz);
 
-  // extra: true = also take tomorrow's share, "review" = today's words again, "missed" = only the ones marked まだ last time
-  function startStudy(extra = false) {
-    let pool;
-    if (ui.studySet === "today" && extra === "review") {
-      pool = shuffle(words.filter(seenToday));
-    } else if (ui.studySet === "today" && extra === "missed") {
+  // extra for the 今日の分 set: {} = today's words not done yet, {day: k} = that day's words,
+  // {all: true} = all of the day's words again, "missed" = only the ones marked まだ last time.
+  function startStudy(extra) {
+    let pool = [], day = study.day ?? null;
+    if (ui.studySet === "today" && extra === "missed") {
       pool = shuffle(study.missed.map(id => words.find(w => w.id === id)).filter(Boolean));
     } else if (ui.studySet === "today") {
-      const s = plan ? planInfo() : null;
-      const n = !s ? 0 : extra === true ? s.quota : s.todayLeft;
-      pool = shuffle(words.filter(w => !seenInRound(w))).slice(0, n);
+      if (plan) {
+        const s = schedule(), opt = extra && typeof extra === "object" ? extra : {};
+        day = opt.day ?? currentDay(s);
+        const ended = opt.day == null && s.today >= s.days;
+        const d = ended ? { words: [] } : s.day(day);
+        const undone = d.words.filter(w => !studied(w));
+        pool = shuffle(opt.all ? d.words : undone.length ? undone : opt.day != null ? d.words : []);
+      }
     } else {
       pool = shuffle(ui.studySet === "todo" ? words.filter(w => (w.level || 0) < MAX_LV) : words);
     }
-    study = { queue: pool.map(w => w.id), i: 0, flipped: false, known: 0, missed: [] };
+    study = { queue: pool.map(w => w.id), i: 0, flipped: false, known: 0, missed: [], day };
     renderStudy();
-  }
-  // Buttons for going over today's words again, shown once today's share is done.
-  function reviewButtons() {
-    const n = words.filter(seenToday).length;
-    if (!n) return "";
-    const m = study.missed.length;
-    return `<button class="btn primary" id="rv-all">今日の ${n} 語をもう一度</button>`
-      + (m && m < n ? `<button class="btn" id="rv-missed">「まだ」の ${m} 語だけ</button>` : "");
-  }
-  function bindReview() {
-    $("#rv-all")?.addEventListener("click", () => startStudy("review"));
-    $("#rv-missed")?.addEventListener("click", () => startStudy("missed"));
   }
   function goPlan() { ui.view = "list"; saveUi(); render(); $("#plan-host").scrollIntoView({ block: "start" }); }
   function renderStudyPlan() {
     const el = $("#study-plan");
     if (!plan || !words.length || store.mode === "loading") { el.hidden = true; return; }
-    const s = planInfo(); el.hidden = false;
-    el.textContent = s.left === 0 ? `第${plan.round}周 完了` : `今日 ${Math.min(s.doneToday, s.quota)} / ${s.quota} 語 · 第${plan.round}周 残り ${s.left} 語`;
+    const s = schedule(); el.hidden = false;
+    if (s.today >= s.days) { el.textContent = `計画の期間（〜${fmtDay(plan.end)}）は終わりました`; return; }
+    const d = s.day(currentDay(s));
+    el.textContent = `${s.today < 0 ? "1日目" : "今日"} ${d.words.filter(studied).length} / ${d.words.length} 語 · ${rangeText(d.from, d.to)}`;
   }
   function renderStudy() {
     const host = $("#study-host");
@@ -526,27 +578,38 @@
     if (store.mode === "loading") { host.innerHTML = `<div class="empty"><p>読み込み中…</p></div>`; return; }
     if (!words.length) { host.innerHTML = `<div class="empty"><strong>カードがまだありません</strong><p>「単語」タブで単語を追加すると、ここで暗記カードとして練習できます。</p></div>`; return; }
     if (ui.studySet === "today" && !plan) {
-      host.innerHTML = `<div class="empty"><strong>まだ計画がありません</strong><p>何日で一周するかを決めると、1日にやる単語の数を計算します。</p><button class="btn primary" id="to-plan">日数を決める</button></div>`;
+      host.innerHTML = `<div class="empty"><strong>まだ計画がありません</strong><p>いつからいつまでに、どの単語をやるかを決めると、毎日やる単語が決まります。</p><button class="btn primary" id="to-plan">計画を立てる</button></div>`;
       $("#to-plan").onclick = goPlan; return;
     }
     if (ui.studySet === "today" && (!study.queue.length || study.i >= study.queue.length)) {
-      const s = planInfo();
-      if (s.left === 0) {
-        host.innerHTML = `<div class="empty"><strong>第${plan.round}周 完了</strong><p>${s.total} 語をすべて一周しました。次の周は「単語」タブから始められます。</p><div class="actions" style="justify-content:center">${reviewButtons()}<button class="btn" id="to-plan">次の周へ</button></div></div>`;
-        $("#to-plan").onclick = goPlan; bindReview(); return;
+      const s = schedule();
+      const k = study.day ?? currentDay(s);
+      if (s.today >= s.days && study.day == null) {
+        host.innerHTML = `<div class="empty"><strong>計画の期間が終わりました</strong><p>${fmtDay(plan.start)}〜${fmtDay(plan.end)} の計画でした。新しい計画は「単語」タブで立てられます。</p><button class="btn primary" id="to-plan">計画を見る</button></div>`;
+        $("#to-plan").onclick = goPlan; return;
       }
-      if (s.todayLeft === 0) {
-        host.innerHTML = `<div class="empty"><strong>今日の ${s.quota} 語 完了</strong><p>${study.queue.length ? `覚えた ${study.known} 枚 / まだ ${study.queue.length - study.known} 枚。` : ""}何度でも繰り返せます。先に進めておくと、明日からの1日の数が減ります。</p><div class="actions" style="justify-content:center">${reviewButtons()}<button class="btn" id="more">明日の分も進める</button></div></div>`;
-        $("#more").onclick = () => startStudy(true); bindReview(); return;
-      }
-      if (!study.queue.length) { startStudy(); if (study.queue.length) return; }
+      const d = s.day(k), n = d.words.length, isToday = k === currentDay(s);
+      const next = k + 1 < s.days ? s.day(k + 1) : null;
+      const title = !n ? "この日の割り当てはありません" : `${isToday ? (s.today < 0 ? "1日目の" : "今日の") : fmtDay(d.date) + "の"} ${n} 語 ${d.words.every(studied) ? "完了" : "おわり"}`;
+      const m = study.missed.length;
+      host.innerHTML = `<div class="empty"><strong>${title}</strong>
+        <p>${study.queue.length ? `覚えた ${study.known} 枚 / まだ ${study.queue.length - study.known} 枚。` : ""}${n ? "何度でも繰り返せます。" : ""}</p>
+        <div class="actions" style="justify-content:center">
+          ${n ? `<button class="btn primary" id="rv-all">この ${n} 語をもう一度</button>` : ""}
+          ${m && m < n ? `<button class="btn" id="rv-missed">「まだ」の ${m} 語だけ</button>` : ""}
+          ${next && next.words.length ? `<button class="btn" id="rv-next">次の日 ${fmtDay(next.date)} の分（${next.words.length}語）</button>` : ""}
+        </div></div>`;
+      $("#rv-all")?.addEventListener("click", () => startStudy({ day: k, all: true }));
+      $("#rv-missed")?.addEventListener("click", () => startStudy("missed"));
+      $("#rv-next")?.addEventListener("click", () => startStudy({ day: k + 1 }));
+      return;
     }
     if (!study.queue.length) {
       host.innerHTML = `<div class="empty"><strong>全部覚えました</strong><p>「まだの単語」はありません。「すべて」に切り替えると全カードを復習できます。</p></div>`; return;
     }
     if (study.i >= study.queue.length) {
       host.innerHTML = `<div class="empty"><strong>${study.queue.length} 枚おわり</strong><p>覚えた ${study.known} 枚 / まだ ${study.queue.length - study.known} 枚</p><button class="btn primary" id="again">もう一周する</button></div>`;
-      $("#again").onclick = startStudy; return;
+      $("#again").onclick = () => startStudy(); return;
     }
     const w = words.find(x => x.id === study.queue[study.i]);
     if (!w) { study.i++; return renderStudy(); }
@@ -572,7 +635,7 @@
     if (ok) study.known++; else study.missed.push(w.id);
     study.i++; study.flipped = false;
     const next = markSeen({ ...w, level: lv });
-    if (lv !== (w.level || 0) || next.seenRound !== w.seenRound) save(next).catch(() => {});
+    if (lv !== (w.level || 0) || next.seenPlan !== w.seenPlan) save(next).catch(() => {});
     renderStudy();
   }
   document.addEventListener("keydown", e => {
@@ -625,7 +688,7 @@
       if (toJa) speak(w.en);
       const lv = Math.max(0, Math.min(MAX_LV, (w.level || 0) + (ok ? 1 : -1)));
       const next = markSeen({ ...w, level: lv });
-      if (lv !== (w.level || 0) || next.seenRound !== w.seenRound) save(next).catch(() => {});
+      if (lv !== (w.level || 0) || next.seenPlan !== w.seenPlan) save(next).catch(() => {});
       renderQuiz();
     };
     $("#next")?.addEventListener("click", () => { quiz.i++; quiz.picked = null; quiz.opts = null; renderQuiz(); });
@@ -635,7 +698,7 @@
   function switchBook(id) {
     if (id === ui.book) return;
     ui.book = id; ui.tag = ""; saveUi();
-    planEdit = false; draftDays = null; quiz = null;
+    planEdit = false; freshPlan = false; quiz = null; study.day = null;
     $("#add-msg").textContent = ""; $("#q").value = ""; ui.q = "";
     applyBook(); render();
     if (ui.view === "study") startStudy();
@@ -714,7 +777,6 @@
     document.querySelectorAll("nav.tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.view === ui.view));
     ["list", "study", "quiz"].forEach(v => $("#view-" + v).hidden = v !== ui.view);
     syncSegs();
-    ensureToday();
     renderBooks(); renderPlan(); renderStats(); renderList();
     if (store.mode !== "loading" && firstData) { firstData = false; startStudy(); quiz = null; }
     if (ui.view === "study") renderStudy();

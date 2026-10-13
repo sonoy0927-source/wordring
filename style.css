@@ -209,3 +209,23 @@ body { margin: 0; -webkit-tap-highlight-color: transparent; }
 .book-rows { display: grid; gap: 8px; }
 .book-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
 .btn.danger.sm.armed { white-space: nowrap; }
+
+/* date-range plan */
+.pf-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pf-label { font-size: 12px; color: var(--muted); width: 2.5em; }
+.pf-row input[type=date] { width: auto; flex: 1 1 140px; min-width: 0; }
+.pf-row input[type=number] { width: 90px; font-variant-numeric: tabular-nums; }
+.pf-row input:disabled { opacity: .55; }
+.pf-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.pf-preview { font-size: 13px; color: var(--muted); display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
+.msg.err:empty { display: none; }
+details.sched { border-top: 1px solid rgba(255,255,255,.18); padding-top: 8px; }
+details.sched summary { cursor: pointer; font-size: 13px; opacity: .85; }
+.sched-scroll { overflow-x: auto; max-height: 320px; overflow-y: auto; margin-top: 8px; }
+.sched table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.sched th { white-space: nowrap; text-align: left; font-weight: 500; opacity: .6; padding: 4px 6px; position: sticky; top: 0; background: var(--ink); }
+.sched td { padding: 5px 6px; border-top: 1px solid rgba(255,255,255,.1); white-space: nowrap; }
+.sched tr.past td { opacity: .55; }
+.sched tr.today td { font-weight: 700; }
+.sched .btn.sm { padding: 3px 10px; font-size: 12px; }
+.w-en .no { font-family: var(--f-ui); font-size: 11px; font-weight: 400; color: var(--muted); min-width: 2.2em; font-variant-numeric: tabular-nums; }
