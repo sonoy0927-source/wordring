@@ -4,7 +4,7 @@
   const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const MAX_LV = 3;
   // Shown next to the app name so you can tell which version a device is running. Keep in step with VERSION in sw.js.
-  const APP_VERSION = "v9";
+  const APP_VERSION = "v10";
   document.querySelector(".brand span").textContent = `英単語帳 ${APP_VERSION}`;
 
   const ICON_SPEAK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>';
@@ -15,7 +15,7 @@
   const MAIN_BOOK = "main";
   let books = [{ id: MAIN_BOOK, name: "マイ単語帳" }];
   const bookOf = w => w.book || MAIN_BOOK;
-  const ui = { view: "list", sheet: false, q: "", tag: "", studyDir: "en", studySet: "todo", quizDir: "en", quizSet: "all", book: MAIN_BOOK };
+  const ui = { view: "list", sheet: false, q: "", tag: "", studyDir: "en", studySet: "todo", quizDir: "en", quizSet: "all", quizCountToday: "all", quizCountAll: 10, book: MAIN_BOOK };
   try { Object.assign(ui, JSON.parse(localStorage.getItem("wordring.ui") || "{}"), { q: "" }); } catch {}
   const saveUi = () => { try { localStorage.setItem("wordring.ui", JSON.stringify(ui)); } catch {} };
 
@@ -738,13 +738,32 @@
       if (plan) {
         const s = schedule();
         day = opt.day ?? currentDay(s);
-        if (opt.day != null || s.today < s.days) ids = s.day(day).words.map(w => w.id);
+        if (opt.day != null || s.today < s.days) ids = shuffle(s.day(day).words).slice(0, quizCount(s.day(day).words.length)).map(w => w.id);
       }
     } else {
-      ids = shuffle(words).sort((a, b) => lvOf(a, ui.quizDir) - lvOf(b, ui.quizDir)).slice(0, 10).map(w => w.id);
+      // Words not yet learned in this direction come first.
+      ids = shuffle(words).sort((a, b) => lvOf(a, ui.quizDir) - lvOf(b, ui.quizDir)).slice(0, quizCount(words.length)).map(w => w.id);
     }
     quiz = { qs: shuffle(ids), i: 0, score: 0, picked: null, misses: [], day, retry: !!opt.ids };
     renderQuiz();
+  }
+  // Number of questions for the current set ("all" = every word available).
+  const countKey = () => ui.quizSet === "today" ? "quizCountToday" : "quizCountAll";
+  const quizCount = available => ui[countKey()] === "all" ? available : Math.min(available, ui[countKey()]);
+  function renderQuizCount() {
+    const host = $("#quiz-count"), cur = ui[countKey()];
+    // Redraw only when the choice changes, so a number being typed isn't wiped by an answer or a sync.
+    const key = ui.quizSet + ":" + cur;
+    if (host.dataset.key === key) return;
+    host.dataset.key = key;
+    const presets = [5, 10, 20, 30];
+    host.innerHTML = `<span class="msg">問題数</span>
+      ${presets.map(n => `<button class="preset" data-n="${n}" aria-pressed="${cur === n}">${n}問</button>`).join("")}
+      <button class="preset" data-n="all" aria-pressed="${cur === "all"}">全部</button>
+      <label class="count-custom ${cur !== "all" && !presets.includes(cur) ? "on" : ""}"><input type="number" id="quiz-n" min="1" max="999" inputmode="numeric" value="${cur !== "all" && !presets.includes(cur) ? cur : ""}" placeholder="自由" aria-label="問題数を入力">問</label>`;
+    const set = v => { ui[countKey()] = v; saveUi(); startQuiz(quiz?.day != null && ui.quizSet === "today" && !quiz.retry ? { day: quiz.day } : {}); };
+    host.querySelectorAll(".preset").forEach(b => b.onclick = () => set(b.dataset.n === "all" ? "all" : +b.dataset.n));
+    $("#quiz-n").onchange = e => { const n = parseInt(e.target.value, 10); if (n >= 1) set(Math.min(999, n)); };
   }
   function renderQuizPlan() {
     const el = $("#quiz-plan");
@@ -758,7 +777,7 @@
     if (store.mode === "loading") { host.innerHTML = `<div class="empty"><p>読み込み中…</p></div>`; return; }
     if (words.length < 4) { host.innerHTML = `<div class="empty"><strong>あと ${4 - words.length} 語でテストできます</strong><p>4択テストには単語が4つ以上必要です。</p></div>`; return; }
     if (!quiz) return startQuiz();
-    renderQuizPlan();
+    renderQuizCount(); renderQuizPlan();
     if (ui.quizSet === "today" && !plan) {
       host.innerHTML = `<div class="empty"><strong>まだ計画がありません</strong><p>いつからいつまでに、どの単語をやるかを決めると、毎日の分をテストできます。</p><button class="btn primary" id="to-plan">計画を立てる</button></div>`;
       $("#to-plan").onclick = goPlan; return;

@@ -243,3 +243,10 @@ details.sched summary { cursor: pointer; font-size: 13px; opacity: .85; }
 .lv-dir { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: var(--muted); line-height: 1; }
 .card-lv { font-size: 11px; justify-content: center; }
 .stat em { display: block; font-style: normal; font-variant-numeric: tabular-nums; }
+
+/* quiz question count */
+.count-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.count-row .preset { background: var(--card); }
+.count-custom { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
+.count-custom input { width: 72px; padding: 6px 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.count-custom.on input { border-color: var(--ink); border-width: 2px; font-weight: 700; }
