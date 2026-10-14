@@ -4,7 +4,7 @@
   const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const MAX_LV = 3;
   // Shown next to the app name so you can tell which version a device is running. Keep in step with VERSION in sw.js.
-  const APP_VERSION = "v10";
+  const APP_VERSION = "v11";
   document.querySelector(".brand span").textContent = `英単語帳 ${APP_VERSION}`;
 
   const ICON_SPEAK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>';
@@ -416,7 +416,7 @@
   }
 
   // ---------- tabs ----------
-  document.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => { ui.view = b.dataset.view; saveUi(); render(); if (ui.view === "study") startStudy(); if (ui.view === "quiz") startQuiz(); });
+  document.querySelectorAll("nav.tabs button").forEach(b => b.onclick = () => { ui.view = b.dataset.view; saveUi(); render(); if (ui.view === "study") startStudy(); });
 
   // ---------- add form ----------
   $("#toggle-more").onclick = () => { const m = $("#more-fields"); m.hidden = !m.hidden; $("#toggle-more").textContent = m.hidden ? "例文・タグも入力" : "例文・タグを閉じる"; };
@@ -618,8 +618,8 @@
   }
   segBind("study-dir", "studyDir", () => { if (ui.studySet === "todo") startStudy(); else { study.flipped = false; renderStudy(); } });
   segBind("study-set", "studySet", () => { study.day = null; startStudy(); });
-  segBind("quiz-dir", "quizDir", () => startQuiz(quiz?.day != null && ui.quizSet === "today" ? { day: quiz.day } : {}));
-  segBind("quiz-set", "quizSet", () => startQuiz());
+  segBind("quiz-dir", "quizDir", () => { quiz = null; renderQuiz(); });
+  segBind("quiz-set", "quizSet", () => { quiz = null; quizDay = null; renderQuiz(); });
 
   // extra for the 今日の分 set: {} = today's words not done yet, {day: k} = that day's words,
   // {all: true} = all of the day's words again, "missed" = only the ones marked まだ last time.
@@ -644,12 +644,15 @@
   }
   function goPlan() { ui.view = "list"; saveUi(); render(); $("#plan-host").scrollIntoView({ block: "start" }); }
   function renderStudyPlan() {
+    // Starts with the book's name: on phones the book tabs are hidden on this screen.
     const el = $("#study-plan");
-    if (!plan || !words.length || store.mode === "loading") { el.hidden = true; return; }
-    const s = schedule(); el.hidden = false;
-    if (s.today >= s.days) { el.textContent = `計画の期間（〜${fmtDay(plan.end)}）は終わりました`; return; }
+    if (!words.length || store.mode === "loading") { el.hidden = true; return; }
+    el.hidden = false;
+    if (!plan) { el.textContent = bookName(); return; }
+    const s = schedule();
+    if (s.today >= s.days) { el.textContent = `${bookName()} · 計画の期間（〜${fmtDay(plan.end)}）は終わりました`; return; }
     const d = s.day(currentDay(s));
-    el.textContent = `${s.today < 0 ? "1日目" : "今日"} ${d.words.filter(studied).length} / ${d.words.length} 語 · ${rangeText(d.from, d.to)}`;
+    el.textContent = `${bookName()} · ${s.today < 0 ? "1日目" : "今日"} ${d.words.filter(studied).length} / ${d.words.length} 語 · ${rangeText(d.from, d.to)}`;
   }
   function renderStudy() {
     const host = $("#study-host");
@@ -729,30 +732,44 @@
   });
 
   // ---------- quiz ----------
-  // opt: {} = the selected set, {day: k} = that plan day's words, {ids: [...]} = these words again (e.g. the misses).
-  let quiz = null;
-  function startQuiz(opt = {}) {
-    let ids = [], day = null;
-    if (opt.ids) { ids = opt.ids; day = quiz?.day ?? null; }
-    else if (ui.quizSet === "today") {
-      if (plan) {
-        const s = schedule();
-        day = opt.day ?? currentDay(s);
-        if (opt.day != null || s.today < s.days) ids = shuffle(s.day(day).words).slice(0, quizCount(s.day(day).words.length)).map(w => w.id);
-      }
-    } else {
-      // Words not yet learned in this direction come first.
-      ids = shuffle(words).sort((a, b) => lvOf(a, ui.quizDir) - lvOf(b, ui.quizDir)).slice(0, quizCount(words.length)).map(w => w.id);
+  // The テスト tab opens on a settings screen (direction, which words, how many questions);
+  // 「テストを始める」 then runs the questions with the settings hidden.
+  let quiz = null;    // the running test, or null while choosing settings
+  let quizDay = null; // plan day chosen from another screen; null = today
+  const bookName = () => books.find(b => b.id === ui.book)?.name || "";
+
+  // Which words the selected set covers, and how to describe it.
+  function quizSource() {
+    if (ui.quizSet !== "today") {
+      return { words, label: `「${bookName()}」の ${words.length} 語から（まだ覚えていない単語を優先）` };
     }
-    quiz = { qs: shuffle(ids), i: 0, score: 0, picked: null, misses: [], day, retry: !!opt.ids };
-    renderQuiz();
+    if (!plan) return { err: "noplan", words: [] };
+    const s = schedule();
+    if (quizDay == null && s.today >= s.days) return { err: "ended", words: [] };
+    const k = quizDay ?? currentDay(s), d = s.day(k);
+    return { words: d.words, label: `${k === s.today ? "今日" : fmtDay(d.date)}の分 · ${rangeText(d.from, d.to)}（${d.words.length}語）` };
+  }
+  // opt.ids: run exactly these words again (e.g. the misses).
+  function startQuiz(opt = {}) {
+    let ids, label;
+    if (opt.ids) { ids = opt.ids; label = `${quiz?.label || ""} · まちがえた単語だけ`; }
+    else {
+      const src = quizSource();
+      if (src.err || !src.words.length) { quiz = null; return renderQuiz(); }
+      // From the whole book, words not yet learned in this direction come first.
+      const pool = ui.quizSet === "today" ? shuffle(src.words) : shuffle(src.words).sort((a, b) => lvOf(a, ui.quizDir) - lvOf(b, ui.quizDir));
+      ids = pool.slice(0, quizCount(src.words.length)).map(w => w.id);
+      label = src.label;
+    }
+    quiz = { qs: shuffle(ids), i: 0, score: 0, picked: null, misses: [], label };
+    renderQuiz(); window.scrollTo(0, 0);
   }
   // Number of questions for the current set ("all" = every word available).
   const countKey = () => ui.quizSet === "today" ? "quizCountToday" : "quizCountAll";
   const quizCount = available => ui[countKey()] === "all" ? available : Math.min(available, ui[countKey()]);
   function renderQuizCount() {
     const host = $("#quiz-count"), cur = ui[countKey()];
-    // Redraw only when the choice changes, so a number being typed isn't wiped by an answer or a sync.
+    // Redraw only when the choice changes, so a number being typed isn't wiped by a sync.
     const key = ui.quizSet + ":" + cur;
     if (host.dataset.key === key) return;
     host.dataset.key = key;
@@ -761,42 +778,50 @@
       ${presets.map(n => `<button class="preset" data-n="${n}" aria-pressed="${cur === n}">${n}問</button>`).join("")}
       <button class="preset" data-n="all" aria-pressed="${cur === "all"}">全部</button>
       <label class="count-custom ${cur !== "all" && !presets.includes(cur) ? "on" : ""}"><input type="number" id="quiz-n" min="1" max="999" inputmode="numeric" value="${cur !== "all" && !presets.includes(cur) ? cur : ""}" placeholder="自由" aria-label="問題数を入力">問</label>`;
-    const set = v => { ui[countKey()] = v; saveUi(); startQuiz(quiz?.day != null && ui.quizSet === "today" && !quiz.retry ? { day: quiz.day } : {}); };
+    const set = v => { ui[countKey()] = v; saveUi(); renderQuiz(); };
     host.querySelectorAll(".preset").forEach(b => b.onclick = () => set(b.dataset.n === "all" ? "all" : +b.dataset.n));
     $("#quiz-n").onchange = e => { const n = parseInt(e.target.value, 10); if (n >= 1) set(Math.min(999, n)); };
   }
-  function renderQuizPlan() {
-    const el = $("#quiz-plan");
-    if (ui.quizSet !== "today" || !plan || !quiz || quiz.day == null || store.mode === "loading") { el.hidden = true; return; }
-    const s = schedule(), d = s.day(quiz.day);
-    el.hidden = false;
-    el.textContent = `${quiz.day === s.today ? "今日" : fmtDay(d.date)}の分 · ${rangeText(d.from, d.to)}（${d.words.length}語）${quiz.retry ? " · まちがえた単語だけ" : ""}`;
-  }
-  function renderQuiz() {
-    const host = $("#quiz-host");
-    if (store.mode === "loading") { host.innerHTML = `<div class="empty"><p>読み込み中…</p></div>`; return; }
-    if (words.length < 4) { host.innerHTML = `<div class="empty"><strong>あと ${4 - words.length} 語でテストできます</strong><p>4択テストには単語が4つ以上必要です。</p></div>`; return; }
-    if (!quiz) return startQuiz();
-    renderQuizCount(); renderQuizPlan();
-    if (ui.quizSet === "today" && !plan) {
+  function renderQuizSetup(host) {
+    const src = quizSource();
+    if (src.err === "noplan") {
       host.innerHTML = `<div class="empty"><strong>まだ計画がありません</strong><p>いつからいつまでに、どの単語をやるかを決めると、毎日の分をテストできます。</p><button class="btn primary" id="to-plan">計画を立てる</button></div>`;
       $("#to-plan").onclick = goPlan; return;
     }
-    if (!quiz.qs.length) {
-      const ended = ui.quizSet === "today" && quiz.day == null;
-      host.innerHTML = `<div class="empty"><strong>${ended ? "計画の期間が終わりました" : "この日の割り当てはありません"}</strong><p>「すべてから10問」に切り替えると、本の中からテストできます。</p></div>`;
+    if (src.err === "ended" || !src.words.length) {
+      host.innerHTML = `<div class="empty"><strong>${src.err === "ended" ? "計画の期間が終わりました" : "この日の割り当てはありません"}</strong><p>「本全体から」に切り替えると、本の中からテストできます。</p></div>`;
       return;
     }
-    if (quiz.i >= quiz.qs.length) {
+    const n = quizCount(src.words.length), want = ui[countKey()];
+    host.innerHTML = `<div class="q-setup">
+      <div class="msg">${esc(src.label)}</div>
+      <div class="setup-count"><b>${n}</b> 問　<span class="msg">${DIR_LABEL[ui.quizDir]}・4択</span></div>
+      ${want !== "all" && want > src.words.length ? `<div class="msg">${src.words.length} 語しかないので ${n} 問です</div>` : ""}
+      <button class="btn primary start" id="quiz-start">テストを始める</button>
+    </div>`;
+    $("#quiz-start").onclick = () => startQuiz();
+  }
+  function renderQuiz() {
+    const host = $("#quiz-host");
+    document.body.classList.toggle("quiz-active", !!quiz && ui.view === "quiz");
+    if (store.mode === "loading") { host.innerHTML = `<div class="empty"><p>読み込み中…</p></div>`; return; }
+    if (words.length < 4) { host.innerHTML = `<div class="empty"><strong>あと ${4 - words.length} 語でテストできます</strong><p>4択テストには単語が4つ以上必要です。</p></div>`; return; }
+    renderQuizCount();
+    if (!quiz) return renderQuizSetup(host);
+    const finished = quiz.i >= quiz.qs.length;
+    const bar = `<div class="q-bar"><span class="q-label">${esc(quiz.label)}</span><button class="link" id="quiz-quit">${finished ? "設定に戻る" : "やめる"}</button></div>`;
+    const bindQuit = () => $("#quiz-quit").onclick = () => { quiz = null; renderQuiz(); };
+    if (finished) {
       const miss = quiz.misses.map(id => words.find(w => w.id === id)).filter(Boolean);
-      host.innerHTML = `<div class="q-word"><div class="msg">結果</div><div class="score">${quiz.score}<span style="font-size:24px;color:var(--muted)"> / ${quiz.qs.length}</span></div>
-        ${miss.length ? `<div class="msg">まちがえた単語</div><div>${miss.map(w => `<div><b style="font-family:var(--f-word)">${esc(w.en)}</b> — ${esc(w.ja)}</div>`).join("")}</div>` : `<div class="msg">全問正解です</div>`}
+      host.innerHTML = `${bar}<div class="q-word"><div class="msg">結果</div><div class="score">${quiz.score}<span style="font-size:24px;color:var(--muted)"> / ${quiz.qs.length}</span></div>
+        ${miss.length ? `<div class="msg">まちがえた単語</div><div class="miss-list">${miss.map(w => `<div><b style="font-family:var(--f-word)">${esc(w.en)}</b> — ${esc(w.ja)}</div>`).join("")}</div>` : `<div class="msg">全問正解です</div>`}
         <div class="actions" style="justify-content:center;margin-top:8px">
           ${miss.length ? `<button class="btn primary" id="retry-miss">まちがえた ${miss.length} 語だけもう一度</button>` : ""}
-          <button class="btn ${miss.length ? "" : "primary"}" id="retry">${ui.quizSet === "today" ? "この日の分をもう一度" : "もう一度（新しい10問）"}</button>
+          <button class="btn ${miss.length ? "" : "primary"}" id="retry">同じ設定でもう一度</button>
         </div></div>`;
+      bindQuit();
       $("#retry-miss")?.addEventListener("click", () => startQuiz({ ids: miss.map(w => w.id) }));
-      $("#retry").onclick = () => startQuiz(quiz.day != null ? { day: quiz.day } : {});
+      $("#retry").onclick = () => startQuiz();
       return;
     }
     const w = words.find(x => x.id === quiz.qs[quiz.i]);
@@ -806,14 +831,15 @@
       quiz.opts = shuffle([w, ...others]);
     }
     const toJa = ui.quizDir === "en";
-    host.innerHTML = `<div class="q-word"><div class="msg">${quiz.i + 1} / ${quiz.qs.length}　${toJa ? "意味を選んでください" : "英単語を選んでください"}</div>
+    host.innerHTML = `${bar}<div class="q-word"><div class="msg">${quiz.i + 1} / ${quiz.qs.length}　${toJa ? "意味を選んでください" : "英単語を選んでください"}</div>
         <div class="big ${toJa ? "" : "ja"}">${esc(toJa ? w.en : w.ja)}</div></div>
       <div class="choices">${quiz.opts.map(o => {
         let cls = "";
         if (quiz.picked) cls = o.id === w.id ? "right" : (o.id === quiz.picked ? "wrong" : "");
         return `<button class="choice ${toJa ? "" : "en"} ${cls}" data-id="${o.id}" ${quiz.picked ? "disabled" : ""}>${esc(toJa ? o.ja : o.en)}</button>`;
       }).join("")}</div>
-      ${quiz.picked ? `<div class="actions" style="justify-content:flex-end"><button class="btn primary" id="next">${quiz.i + 1 < quiz.qs.length ? "次へ" : "結果を見る"}</button></div>` : ""}`;
+      <button class="btn primary next" id="next" ${quiz.picked ? "" : "hidden"}>${quiz.i + 1 < quiz.qs.length ? "次へ" : "結果を見る"}</button>`;
+    bindQuit();
     host.querySelector(".choices").onclick = e => {
       const b = e.target.closest(".choice"); if (!b || quiz.picked) return;
       quiz.picked = b.dataset.id;
@@ -826,20 +852,19 @@
       if (lv !== before || next.seenPlan !== w.seenPlan) save(next).catch(() => {});
       renderQuiz();
     };
-    $("#next")?.addEventListener("click", () => { quiz.i++; quiz.picked = null; quiz.opts = null; renderQuiz(); });
+    $("#next").onclick = () => { quiz.i++; quiz.picked = null; quiz.opts = null; renderQuiz(); };
   }
-  // Opens the テスト tab on a plan day's words (from the plan panel or the card screen).
-  function goQuizDay(k) { ui.view = "quiz"; ui.quizSet = "today"; saveUi(); render(); startQuiz({ day: k }); window.scrollTo(0, 0); }
+  // Opens the テスト tab's settings on a plan day's words (from the plan panel or the card screen).
+  function goQuizDay(k) { ui.view = "quiz"; ui.quizSet = "today"; quizDay = k; quiz = null; saveUi(); render(); window.scrollTo(0, 0); }
 
   // ---------- books ----------
   function switchBook(id) {
     if (id === ui.book) return;
     ui.book = id; ui.tag = ""; saveUi();
-    planEdit = false; freshPlan = false; quiz = null; study.day = null;
+    planEdit = false; freshPlan = false; quiz = null; quizDay = null; study.day = null;
     $("#add-msg").textContent = ""; $("#q").value = ""; ui.q = "";
     applyBook(); render();
     if (ui.view === "study") startStudy();
-    if (ui.view === "quiz") startQuiz();
   }
   function renderBooks() {
     const host = $("#bookbar");
@@ -911,6 +936,7 @@
   // ---------- render ----------
   let firstData = true;
   function render() {
+    document.body.dataset.view = ui.view;
     document.querySelectorAll("nav.tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.view === ui.view));
     ["list", "study", "quiz"].forEach(v => $("#view-" + v).hidden = v !== ui.view);
     syncSegs();
