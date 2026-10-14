@@ -41,8 +41,8 @@
     <div id="plan-host"></div>
     <div class="stats">
       <div class="stat"><b id="st-total">0</b><span>登録した単語</span></div>
-      <div class="stat"><b id="st-done">0</b><span>覚えた</span></div>
-      <div class="stat"><b id="st-pct">0%</b><span>習得率</span><div class="meter"><div id="st-bar"></div></div></div>
+      <div class="stat"><b id="st-en">0</b><span>英→日 覚えた <em id="st-en-pct">0%</em></span><div class="meter"><div id="st-en-bar"></div></div></div>
+      <div class="stat"><b id="st-ja">0</b><span>日→英 覚えた <em id="st-ja-pct">0%</em></span><div class="meter"><div id="st-ja-bar"></div></div></div>
     </div>
 
     <form class="add" id="add-form" autocomplete="off">
@@ -98,8 +98,12 @@
         <button aria-pressed="true" data-v="en">英 → 日</button>
         <button aria-pressed="false" data-v="ja">日 → 英</button>
       </div>
-      <span class="msg">4択・10問</span>
+      <div class="seg" id="quiz-set">
+        <button aria-pressed="false" data-v="today">今日の分</button>
+        <button aria-pressed="true" data-v="all">すべてから10問</button>
+      </div>
     </div>
+    <div class="plan-mini" id="quiz-plan" hidden></div>
     <div id="quiz-host"></div>
   </section>
 </div>

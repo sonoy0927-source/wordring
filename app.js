@@ -3,6 +3,9 @@
   const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
   const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const MAX_LV = 3;
+  // Shown next to the app name so you can tell which version a device is running. Keep in step with VERSION in sw.js.
+  const APP_VERSION = "v9";
+  document.querySelector(".brand span").textContent = `英単語帳 ${APP_VERSION}`;
 
   const ICON_SPEAK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>';
   const ICON_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
@@ -12,7 +15,7 @@
   const MAIN_BOOK = "main";
   let books = [{ id: MAIN_BOOK, name: "マイ単語帳" }];
   const bookOf = w => w.book || MAIN_BOOK;
-  const ui = { view: "list", sheet: false, q: "", tag: "", studyDir: "en", studySet: "todo", quizDir: "en", book: MAIN_BOOK };
+  const ui = { view: "list", sheet: false, q: "", tag: "", studyDir: "en", studySet: "todo", quizDir: "en", quizSet: "all", book: MAIN_BOOK };
   try { Object.assign(ui, JSON.parse(localStorage.getItem("wordring.ui") || "{}"), { q: "" }); } catch {}
   const saveUi = () => { try { localStorage.setItem("wordring.ui", JSON.stringify(ui)); } catch {} };
 
@@ -216,6 +219,12 @@
     } catch { toast("この環境では読み上げできません"); }
   }
   const lvDots = lv => `<span class="lv" title="習熟度 ${lv}/${MAX_LV}">${[1,2,3].map(i => `<i class="${i <= lv ? "on" : ""}"></i>`).join("")}</span>`;
+  // Progress is kept separately for 英→日 ("en") and 日→英 ("ja").
+  // Words saved before the split only have `level`, which counted as 英→日.
+  const DIR_LABEL = { en: "英→日", ja: "日→英" };
+  const lvOf = (w, dir) => dir === "ja" ? (w.levelJa || 0) : (w.levelEn ?? w.level ?? 0);
+  const withLv = (w, dir, lv) => dir === "ja" ? { ...w, levelJa: lv } : { ...w, levelEn: lv };
+  const lvPair = w => `<span class="lvs"><span class="lv-dir" title="英→日 ${lvOf(w, "en")}/${MAX_LV}">英${lvDots(lvOf(w, "en"))}</span><span class="lv-dir" title="日→英 ${lvOf(w, "ja")}/${MAX_LV}">日${lvDots(lvOf(w, "ja"))}</span></span>`;
   // Circled numbers in tags (①, ⑫, ㉑, ❸ …) become plain two-digit numbers (01, 12, 21, 03),
   // so tags like 第①章 and 第⑫章 read and sort the same way as typed numbers.
   const CIRCLED = [
@@ -318,7 +327,7 @@
           : `<div class="goal"><b>0</b><span>この日の割り当てはありません</span></div>`}
         ${next ? `<div class="sub">明日 ${fmtDay(next.date)}：${rangeText(next.from, next.to)}（${next.words.length}語）</div>` : `<div class="sub">今日が最終日です</div>`}
         ${skipped ? `<div class="sub">前の日のやり残し ${skipped} 語はスキップしました。日程からいつでもできます。</div>` : ""}`;
-      actions = n ? `<button class="btn" id="plan-go">${done >= n ? "今日の分をもう一度" : "今日の分を始める"}</button>` : "";
+      actions = n ? `<button class="btn" id="plan-go">${done >= n ? "今日の分をもう一度" : "今日の分を始める"}</button><button class="btn ghost" id="plan-quiz">今日の分をテスト</button>` : "";
     }
     host.innerHTML = `<div class="plan">${head}${body}
       <div class="actions">${actions}<button class="btn ghost" id="plan-edit">計画を変える</button></div>
@@ -333,6 +342,7 @@
     </div>`;
     const goStudy = arg => { ui.view = "study"; ui.studySet = "today"; saveUi(); render(); startStudy(arg); window.scrollTo(0, 0); };
     $("#plan-go")?.addEventListener("click", () => { const s2 = schedule(), d = s2.day(currentDay(s2)); goStudy({ all: d.words.every(studied) }); });
+    $("#plan-quiz")?.addEventListener("click", () => goQuizDay(currentDay(schedule())));
     $("#plan-new")?.addEventListener("click", () => { planEdit = true; freshPlan = true; renderPlan(); });
     $("#plan-edit").onclick = () => { planEdit = true; freshPlan = false; renderPlan(); };
     const det = host.querySelector("details.sched");
@@ -438,10 +448,14 @@
   }
 
   function renderStats() {
-    const total = words.length, done = words.filter(w => (w.level || 0) >= MAX_LV).length;
-    const pct = total ? Math.round(done / total * 100) : 0;
-    $("#st-total").textContent = total; $("#st-done").textContent = done; $("#st-pct").textContent = pct + "%";
-    $("#st-bar").style.width = pct + "%";
+    const total = words.length;
+    $("#st-total").textContent = total;
+    ["en", "ja"].forEach(dir => {
+      const done = words.filter(w => lvOf(w, dir) >= MAX_LV).length, pct = total ? Math.round(done / total * 100) : 0;
+      $("#st-" + dir).textContent = done;
+      $("#st-" + dir + "-pct").textContent = pct + "%";
+      $("#st-" + dir + "-bar").style.width = pct + "%";
+    });
     const tags = [...new Set(words.map(w => w.tag).filter(Boolean))].sort();
     if (ui.tag && !tags.includes(ui.tag)) ui.tag = "";
     $("#f-tag").innerHTML = `<option value="">すべてのタグ</option>` + tags.map(t => `<option ${t === ui.tag ? "selected" : ""}>${esc(t)}</option>`).join("");
@@ -464,7 +478,7 @@
     host.innerHTML = `<ul class="words ${ui.sheet ? "sheet-on" : ""}">` + list.map(w => `
       <li data-id="${w.id}">
         <div class="w-en"><span class="no">${no.get(w.id)}</span>${esc(w.en)}${w.tag ? ` <span class="tag">${esc(w.tag)}</span>` : ""}</div>
-        <div class="w-meta">${lvDots(w.level || 0)}
+        <div class="w-meta">${lvPair(w)}
           <button class="icon-btn" data-act="speak" aria-label="${esc(w.en)} を読み上げ">${ICON_SPEAK}</button>
           <button class="icon-btn" data-act="edit" aria-label="${esc(w.en)} を編集">${ICON_EDIT}</button></div>
         <div class="w-ja" data-act="peek">${esc(w.ja)}</div>
@@ -513,7 +527,7 @@
       </div></form></div>`;
     $("#ov").onclick = e => { if (e.target.id === "ov") closeDlg(); };
     $("#ed-cancel").onclick = closeDlg;
-    $("#ed-reset").onclick = async () => { try { await save({ ...w, level: 0 }); } catch { return; } closeDlg(); toast("習熟度をリセットしました"); };
+    $("#ed-reset").onclick = async () => { try { await save({ ...w, level: 0, levelEn: 0, levelJa: 0 }); } catch { return; } closeDlg(); toast("習熟度をリセットしました"); };
     $("#ed-del").onclick = async e => {
       const b = e.currentTarget;
       if (!b.classList.contains("armed")) { b.classList.add("armed"); b.textContent = "本当に削除する"; return; }
@@ -599,12 +613,13 @@
     el.onclick = e => { const b = e.target.closest("button"); if (!b) return; ui[key] = b.dataset.v; saveUi(); syncSegs(); after(); };
   }
   function syncSegs() {
-    [["study-dir", "studyDir"], ["study-set", "studySet"], ["quiz-dir", "quizDir"]].forEach(([id, k]) =>
+    [["study-dir", "studyDir"], ["study-set", "studySet"], ["quiz-dir", "quizDir"], ["quiz-set", "quizSet"]].forEach(([id, k]) =>
       $("#" + id).querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === ui[k])));
   }
-  segBind("study-dir", "studyDir", () => { study.flipped = false; renderStudy(); });
+  segBind("study-dir", "studyDir", () => { if (ui.studySet === "todo") startStudy(); else { study.flipped = false; renderStudy(); } });
   segBind("study-set", "studySet", () => { study.day = null; startStudy(); });
-  segBind("quiz-dir", "quizDir", startQuiz);
+  segBind("quiz-dir", "quizDir", () => startQuiz(quiz?.day != null && ui.quizSet === "today" ? { day: quiz.day } : {}));
+  segBind("quiz-set", "quizSet", () => startQuiz());
 
   // extra for the 今日の分 set: {} = today's words not done yet, {day: k} = that day's words,
   // {all: true} = all of the day's words again, "missed" = only the ones marked まだ last time.
@@ -622,7 +637,7 @@
         pool = shuffle(opt.all ? d.words : undone.length ? undone : opt.day != null ? d.words : []);
       }
     } else {
-      pool = shuffle(ui.studySet === "todo" ? words.filter(w => (w.level || 0) < MAX_LV) : words);
+      pool = shuffle(ui.studySet === "todo" ? words.filter(w => lvOf(w, ui.studyDir) < MAX_LV) : words);
     }
     study = { queue: pool.map(w => w.id), i: 0, flipped: false, known: 0, missed: [], day };
     renderStudy();
@@ -661,10 +676,12 @@
         <div class="actions" style="justify-content:center">
           ${n ? `<button class="btn primary" id="rv-all">この ${n} 語をもう一度</button>` : ""}
           ${m && m < n ? `<button class="btn" id="rv-missed">「まだ」の ${m} 語だけ</button>` : ""}
+          ${n && words.length >= 4 ? `<button class="btn" id="rv-quiz">この ${n} 語をテスト</button>` : ""}
           ${next && next.words.length ? `<button class="btn" id="rv-next">次の日 ${fmtDay(next.date)} の分（${next.words.length}語）</button>` : ""}
         </div></div>`;
       $("#rv-all")?.addEventListener("click", () => startStudy({ day: k, all: true }));
       $("#rv-missed")?.addEventListener("click", () => startStudy("missed"));
+      $("#rv-quiz")?.addEventListener("click", () => goQuizDay(k));
       $("#rv-next")?.addEventListener("click", () => startStudy({ day: k + 1 }));
       return;
     }
@@ -683,7 +700,7 @@
       ? `<div class="big ja">${esc(w.ja)}</div><div class="sub">${esc(w.en)}</div>`
       : `<div class="big">${esc(w.en)}</div><div class="sub">${esc(w.ja)}</div>`;
     host.innerHTML = `<div class="deck"><button class="card ${study.flipped ? "flipped" : ""}" id="card" aria-label="カードをめくる">
-        <div class="face"><span class="count">${study.i + 1} / ${study.queue.length}</span>${lvDots(w.level || 0)}${front}<div class="hint">タップでめくる・スペースキー</div></div>
+        <div class="face"><span class="count">${study.i + 1} / ${study.queue.length}</span><span class="lv-dir card-lv">${DIR_LABEL[ui.studyDir]} ${lvDots(lvOf(w, ui.studyDir))}</span>${front}<div class="hint">タップでめくる・スペースキー</div></div>
         <div class="face back"><span class="count">${study.i + 1} / ${study.queue.length}</span>${back}${w.ex ? `<p class="ex">${esc(w.ex)}</p>` : ""}</div>
       </button></div>
       <div class="actions" style="justify-content:center"><button class="btn ghost" id="say">${ICON_SPEAK.replace("<svg", '<svg width="16" height="16"')} 発音を聞く</button></div>
@@ -695,11 +712,12 @@
   }
   function flip() { study.flipped = !study.flipped; $("#card")?.classList.toggle("flipped", study.flipped); }
   function judge(w, ok) {
-    const lv = Math.max(0, Math.min(MAX_LV, (w.level || 0) + (ok ? 1 : -1)));
+    const dir = ui.studyDir, before = lvOf(w, dir);
+    const lv = Math.max(0, Math.min(MAX_LV, before + (ok ? 1 : -1)));
     if (ok) study.known++; else study.missed.push(w.id);
     study.i++; study.flipped = false;
-    const next = markSeen({ ...w, level: lv });
-    if (lv !== (w.level || 0) || next.seenPlan !== w.seenPlan) save(next).catch(() => {});
+    const next = markSeen(withLv(w, dir, lv));
+    if (lv !== before || next.seenPlan !== w.seenPlan) save(next).catch(() => {});
     renderStudy();
   }
   document.addEventListener("keydown", e => {
@@ -711,23 +729,56 @@
   });
 
   // ---------- quiz ----------
+  // opt: {} = the selected set, {day: k} = that plan day's words, {ids: [...]} = these words again (e.g. the misses).
   let quiz = null;
-  function startQuiz() {
-    const pool = shuffle(words).sort((a, b) => (a.level || 0) - (b.level || 0)).slice(0, 10);
-    quiz = { qs: shuffle(pool).map(w => w.id), i: 0, score: 0, picked: null, misses: [] };
+  function startQuiz(opt = {}) {
+    let ids = [], day = null;
+    if (opt.ids) { ids = opt.ids; day = quiz?.day ?? null; }
+    else if (ui.quizSet === "today") {
+      if (plan) {
+        const s = schedule();
+        day = opt.day ?? currentDay(s);
+        if (opt.day != null || s.today < s.days) ids = s.day(day).words.map(w => w.id);
+      }
+    } else {
+      ids = shuffle(words).sort((a, b) => lvOf(a, ui.quizDir) - lvOf(b, ui.quizDir)).slice(0, 10).map(w => w.id);
+    }
+    quiz = { qs: shuffle(ids), i: 0, score: 0, picked: null, misses: [], day, retry: !!opt.ids };
     renderQuiz();
+  }
+  function renderQuizPlan() {
+    const el = $("#quiz-plan");
+    if (ui.quizSet !== "today" || !plan || !quiz || quiz.day == null || store.mode === "loading") { el.hidden = true; return; }
+    const s = schedule(), d = s.day(quiz.day);
+    el.hidden = false;
+    el.textContent = `${quiz.day === s.today ? "今日" : fmtDay(d.date)}の分 · ${rangeText(d.from, d.to)}（${d.words.length}語）${quiz.retry ? " · まちがえた単語だけ" : ""}`;
   }
   function renderQuiz() {
     const host = $("#quiz-host");
     if (store.mode === "loading") { host.innerHTML = `<div class="empty"><p>読み込み中…</p></div>`; return; }
     if (words.length < 4) { host.innerHTML = `<div class="empty"><strong>あと ${4 - words.length} 語でテストできます</strong><p>4択テストには単語が4つ以上必要です。</p></div>`; return; }
     if (!quiz) return startQuiz();
+    renderQuizPlan();
+    if (ui.quizSet === "today" && !plan) {
+      host.innerHTML = `<div class="empty"><strong>まだ計画がありません</strong><p>いつからいつまでに、どの単語をやるかを決めると、毎日の分をテストできます。</p><button class="btn primary" id="to-plan">計画を立てる</button></div>`;
+      $("#to-plan").onclick = goPlan; return;
+    }
+    if (!quiz.qs.length) {
+      const ended = ui.quizSet === "today" && quiz.day == null;
+      host.innerHTML = `<div class="empty"><strong>${ended ? "計画の期間が終わりました" : "この日の割り当てはありません"}</strong><p>「すべてから10問」に切り替えると、本の中からテストできます。</p></div>`;
+      return;
+    }
     if (quiz.i >= quiz.qs.length) {
       const miss = quiz.misses.map(id => words.find(w => w.id === id)).filter(Boolean);
       host.innerHTML = `<div class="q-word"><div class="msg">結果</div><div class="score">${quiz.score}<span style="font-size:24px;color:var(--muted)"> / ${quiz.qs.length}</span></div>
         ${miss.length ? `<div class="msg">まちがえた単語</div><div>${miss.map(w => `<div><b style="font-family:var(--f-word)">${esc(w.en)}</b> — ${esc(w.ja)}</div>`).join("")}</div>` : `<div class="msg">全問正解です</div>`}
-        <div class="actions" style="justify-content:center;margin-top:8px"><button class="btn primary" id="retry">もう一度</button></div></div>`;
-      $("#retry").onclick = startQuiz; return;
+        <div class="actions" style="justify-content:center;margin-top:8px">
+          ${miss.length ? `<button class="btn primary" id="retry-miss">まちがえた ${miss.length} 語だけもう一度</button>` : ""}
+          <button class="btn ${miss.length ? "" : "primary"}" id="retry">${ui.quizSet === "today" ? "この日の分をもう一度" : "もう一度（新しい10問）"}</button>
+        </div></div>`;
+      $("#retry-miss")?.addEventListener("click", () => startQuiz({ ids: miss.map(w => w.id) }));
+      $("#retry").onclick = () => startQuiz(quiz.day != null ? { day: quiz.day } : {});
+      return;
     }
     const w = words.find(x => x.id === quiz.qs[quiz.i]);
     if (!w) { quiz.i++; return renderQuiz(); }
@@ -750,13 +801,16 @@
       const ok = quiz.picked === w.id;
       if (ok) quiz.score++; else quiz.misses.push(w.id);
       if (toJa) speak(w.en);
-      const lv = Math.max(0, Math.min(MAX_LV, (w.level || 0) + (ok ? 1 : -1)));
-      const next = markSeen({ ...w, level: lv });
-      if (lv !== (w.level || 0) || next.seenPlan !== w.seenPlan) save(next).catch(() => {});
+      const before = lvOf(w, ui.quizDir);
+      const lv = Math.max(0, Math.min(MAX_LV, before + (ok ? 1 : -1)));
+      const next = markSeen(withLv(w, ui.quizDir, lv));
+      if (lv !== before || next.seenPlan !== w.seenPlan) save(next).catch(() => {});
       renderQuiz();
     };
     $("#next")?.addEventListener("click", () => { quiz.i++; quiz.picked = null; quiz.opts = null; renderQuiz(); });
   }
+  // Opens the テスト tab on a plan day's words (from the plan panel or the card screen).
+  function goQuizDay(k) { ui.view = "quiz"; ui.quizSet = "today"; saveUi(); render(); startQuiz({ day: k }); window.scrollTo(0, 0); }
 
   // ---------- books ----------
   function switchBook(id) {

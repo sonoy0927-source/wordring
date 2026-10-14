@@ -65,7 +65,7 @@ nav.tabs button[aria-selected="true"] { background: var(--ink); color: var(--car
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
 .stat b { display: block; font-family: var(--f-word); font-size: 26px; line-height: 1.1; font-variant-numeric: tabular-nums; }
-.stat span { font-size: 12px; color: var(--muted); letter-spacing: .04em; }
+.stat span { white-space: nowrap; font-size: 12px; color: var(--muted); letter-spacing: .04em; }
 .meter { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 8px; }
 .meter div { height: 100%; background: var(--ok); width: 0; transition: width .4s; }
 
@@ -237,3 +237,9 @@ details.sched summary { cursor: pointer; font-size: 13px; opacity: .85; }
 .im-preview td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .im-preview td.en { font-family: var(--f-word); font-weight: 700; white-space: nowrap; }
 .im-preview td.ex { font-family: var(--f-word); font-style: italic; color: var(--muted); }
+
+/* progress per direction */
+.lvs { display: inline-flex; flex-direction: column; gap: 3px; align-items: flex-end; }
+.lv-dir { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: var(--muted); line-height: 1; }
+.card-lv { font-size: 11px; justify-content: center; }
+.stat em { display: block; font-style: normal; font-variant-numeric: tabular-nums; }
