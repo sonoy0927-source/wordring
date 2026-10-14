@@ -36,6 +36,8 @@ html, body { background: var(--paper); color: var(--ink); }
 body { font-family: var(--f-ui); font-size: 15px; line-height: 1.6; padding-inline: 16px; padding-block: 0 calc(88px + env(safe-area-inset-bottom, 0px)); }
 @media (min-width: 720px) { body { padding-bottom: 48px; } }
 .wrap { max-width: 720px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.wrap > *, #quiz-host > *, #study-host > * { min-width: 0; }
+.wrap .wrap { margin: 0; max-width: none; }
 button, input, textarea, select { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
@@ -278,9 +280,19 @@ body.quiz-active #view-quiz .study-opts, body.quiz-active #quiz-count { display:
   #study-host .face { padding: 32px 18px 26px; }
   #study-host .judge .btn { padding: 12px; }
   #study-host > .actions .btn { padding: 4px 12px; }
-  body.quiz-active #view-quiz { gap: 10px; }
-  body.quiz-active .q-word { padding: 18px 16px; }
-  body.quiz-active .choice { min-height: 48px; padding: 11px 14px; }
+  body.quiz-active #view-quiz {
+    height: calc(100dvh - env(safe-area-inset-top, 0px) - 10px - 88px - env(safe-area-inset-bottom, 0px));
+    display: flex; flex-direction: column;
+  }
+  body.quiz-active #quiz-host { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+  /* The word takes whatever height is left; choices and 次へ keep a comfortable thumb size. */
+  body.quiz-active .q-word { flex: 1 1 auto; min-height: 110px; align-content: center; padding: 16px; overflow-y: auto; }
+  body.quiz-active .q-word .big { font-size: clamp(34px, 11vw, 52px); }
+  body.quiz-active .q-word .big.ja { font-size: clamp(26px, 8vw, 38px); }
+  body.quiz-active .choices { grid-template-columns: 1fr; gap: 8px; }
+  body.quiz-active .choice { min-height: 58px; padding: 14px 16px; font-size: 17px; }
+  body.quiz-active .choice.en { font-size: 19px; }
+  body.quiz-active .btn.next { padding: 16px; font-size: 17px; }
 }
 #quiz-host { display: grid; gap: 10px; }
 .q-bar .link { white-space: nowrap; flex-shrink: 0; }

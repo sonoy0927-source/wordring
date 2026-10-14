@@ -4,7 +4,7 @@
   const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const MAX_LV = 3;
   // Shown next to the app name so you can tell which version a device is running. Keep in step with VERSION in sw.js.
-  const APP_VERSION = "v11";
+  const APP_VERSION = "v12";
   document.querySelector(".brand span").textContent = `英単語帳 ${APP_VERSION}`;
 
   const ICON_SPEAK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>';
@@ -838,7 +838,7 @@
         if (quiz.picked) cls = o.id === w.id ? "right" : (o.id === quiz.picked ? "wrong" : "");
         return `<button class="choice ${toJa ? "" : "en"} ${cls}" data-id="${o.id}" ${quiz.picked ? "disabled" : ""}>${esc(toJa ? o.ja : o.en)}</button>`;
       }).join("")}</div>
-      <button class="btn primary next" id="next" ${quiz.picked ? "" : "hidden"}>${quiz.i + 1 < quiz.qs.length ? "次へ" : "結果を見る"}</button>`;
+      <button class="btn primary next" id="next" ${quiz.picked ? "" : 'disabled style="visibility:hidden"'}>${quiz.i + 1 < quiz.qs.length ? "次へ" : "結果を見る"}</button>`;
     bindQuit();
     host.querySelector(".choices").onclick = e => {
       const b = e.target.closest(".choice"); if (!b || quiz.picked) return;
