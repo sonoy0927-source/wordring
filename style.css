@@ -313,3 +313,24 @@ div.deck-tile { cursor: default; }
 .deck-opts .opt-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .deck-opts .opt-label { font-size: 12px; color: var(--muted); width: 2.5em; }
 .deck-opts .start { flex: 1; padding: 13px; font-size: 15px; }
+
+/* card list: fold-out sections */
+.deck-tile.all { padding: 14px 16px; }
+.deck-tile.all .deck-title { font-size: 16px; }
+.deck-fold { border: 1px solid var(--line); background: var(--card); border-radius: 12px; }
+.deck-fold > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 13px 16px; font-weight: 700; }
+.deck-fold > summary::-webkit-details-marker { display: none; }
+.deck-fold > summary::after { content: ""; width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); margin-left: auto; transition: transform .2s; }
+.deck-fold[open] > summary::after { transform: rotate(-135deg); }
+.deck-fold > summary .msg { font-weight: 400; font-size: 12px; }
+.fold-body { padding: 0 10px 10px; }
+.fold-body .deck-tile { background: var(--paper); }
+.day-list { display: grid; max-height: 50vh; overflow-y: auto; border-radius: 10px; }
+.day-row { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) auto; gap: 8px; align-items: center; text-align: left; border: 0; border-top: 1px solid var(--line); background: none; padding: 10px 8px; cursor: pointer; font-size: 14px; font-variant-numeric: tabular-nums; color: var(--ink); }
+.day-row:first-child { border-top: 0; }
+.day-row:hover { background: var(--paper); }
+.day-row .day-range { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.day-row .day-done { font-size: 13px; color: var(--muted); }
+.day-row.is-today { font-weight: 700; background: var(--paper); }
+.day-row.is-past { opacity: .55; }
+@media (prefers-reduced-motion: reduce) { .deck-fold > summary::after { transition: none; } }

@@ -4,7 +4,7 @@
   const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const MAX_LV = 3;
   // Shown next to the app name so you can tell which version a device is running. Keep in step with VERSION in sw.js.
-  const APP_VERSION = "v13";
+  const APP_VERSION = "v15";
   document.querySelector(".brand span").textContent = `英単語帳 ${APP_VERSION}`;
 
   const ICON_SPEAK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>';
@@ -54,6 +54,20 @@
       if (this.mode === "db") { this.cloud(fb.mod.setDoc(this.ref(BOOKS_ID), { list })); }
       else this.saveLocal();
       applyBook(); render();
+    },
+    // Merges the same fields into many words at once (one batch instead of one write per word).
+    async updateMany(ids, fields) {
+      if (this.mode === "db") {
+        for (let i = 0; i < ids.length; i += 400) {
+          const b = fb.mod.writeBatch(fb.db);
+          ids.slice(i, i + 400).forEach(id => b.update(this.ref(id), fields));
+          this.cloud(b.commit());
+        }
+        return;
+      }
+      const set = new Set(ids);
+      allWords = allWords.map(w => set.has(w.id) ? { ...w, ...fields } : w);
+      this.saveLocal(); applyBook(); render();
     },
     async put(w) {
       const { id, ...body } = w;
@@ -661,6 +675,7 @@
       <div class="opt-row"><span class="opt-label">向き</span>${seg("dir", [["en", "英 → 日"], ["ja", "日 → 英"]])}</div>
       <div class="opt-row"><span class="opt-label">順番</span>${seg("order", [["shuffle", "シャッフル"], ["number", "番号順"]])}</div>
       <label class="pf-check"><input type="checkbox" id="dk-todo" ${draft.todo ? "checked" : ""}> この向きでまだ覚えていない単語だけ</label>
+      ${deck.kind !== "ids" ? `<button class="link" type="button" id="dk-reset">この ${all.length} 語の習熟度をリセット…</button>` : ""}
       <div class="msg" id="dk-note"></div>
       <div class="actions"><button class="btn primary start" type="submit" id="dk-go"></button><button class="btn ghost" type="button" id="dk-cancel">キャンセル</button></div>
     </form></div>`;
@@ -675,6 +690,7 @@
     $("#dk-todo").onchange = e => { draft.todo = e.target.checked; update(); };
     $("#ov").onclick = e => { if (e.target.id === "ov") closeDlg(); };
     $("#dk-cancel").onclick = closeDlg;
+    $("#dk-reset")?.addEventListener("click", () => openResetDialog(deck));
     $("#dk").onsubmit = e => {
       e.preventDefault();
       ui.studyDir = draft.dir; ui.studyOrder = draft.order; ui.studyOnlyTodo = draft.todo; saveUi();
@@ -706,17 +722,39 @@
     }
     const tags = [...new Set(words.map(w => w.tag).filter(Boolean))].sort();
     const noTag = words.filter(w => !w.tag);
+    // 日程ごと: one row per plan day, today highlighted, past days dimmed.
+    let daysHtml = "", dayCount = 0;
+    if (plan) {
+      const s = schedule();
+      const rows = Array.from({ length: s.days }, (_, k) => s.day(k)).filter(d => d.words.length);
+      dayCount = rows.length;
+      daysHtml = rows.map(d => {
+        const done = d.words.filter(studied).length, n = d.words.length;
+        const cls = d.k === s.today ? "is-today" : d.k < s.today ? "is-past" : "";
+        return `<button class="day-row ${cls}" data-deck='${esc(JSON.stringify({ kind: "day", day: d.k }))}'>
+          <span class="day-date">${fmtDay(d.date)}${d.k === s.today ? " 今日" : ""}</span>
+          <span class="day-range">${rangeText(d.from, d.to)} · ${n}語</span>
+          <span class="day-done">${done >= n ? "✓" : `${done}/${n}`}</span></button>`;
+      }).join("");
+    }
+    const open = ui.deckOpen || {};
+    const fold = (key, title, count, body) => `<details class="deck-fold" data-key="${key}" ${open[key] ? "open" : ""}>
+      <summary><span>${title}</span><span class="msg">${count}</span></summary><div class="fold-body">${body}</div></details>`;
     host.innerHTML = `<div class="deck-picker">
       <div class="deck-book msg">${esc(bookName())}</div>
       ${todayHtml}
-      ${tags.length ? `<div class="section-h">タグ</div><div class="deck-grid">
+      ${tile({ kind: "all" }, "すべての単語", progress(words), "all")}
+      ${tags.length ? fold("tags", "タグごと", `${tags.length + (noTag.length ? 1 : 0)}個`, `<div class="deck-grid">
         ${tags.map(t => tile({ kind: "tag", tag: t }, t, progress(words.filter(w => w.tag === t)))).join("")}
         ${noTag.length ? tile({ kind: "notag" }, "タグなし", progress(noTag)) : ""}
-      </div>` : ""}
-      <div class="section-h">そのほか</div>
-      <div class="deck-grid">${tile({ kind: "all" }, "すべての単語", progress(words))}</div>
+      </div>`) : ""}
+      ${plan && dayCount ? fold("days", "日程ごと", `${fmtDay(plan.start)}〜${fmtDay(plan.end)} · ${dayCount}日`, `<div class="day-list">${daysHtml}</div>`) : ""}
     </div>`;
     host.querySelectorAll("[data-deck]").forEach(b => b.onclick = () => openDeckOptions(JSON.parse(b.dataset.deck)));
+    host.querySelectorAll("details.deck-fold").forEach(d => d.ontoggle = () => {
+      ui.deckOpen = { ...(ui.deckOpen || {}), [d.dataset.key]: d.open }; saveUi();
+      if (d.open && d.dataset.key === "days") d.querySelector(".is-today")?.scrollIntoView({ block: "nearest" });
+    });
     $("#deck-noplan")?.addEventListener("click", goPlan);
   }
 
@@ -910,6 +948,56 @@
   }
   // Opens the テスト tab's settings on a plan day's words (from the plan panel or the card screen).
   function goQuizDay(k) { ui.view = "quiz"; ui.quizSet = "today"; quizDay = k; quiz = null; saveUi(); render(); window.scrollTo(0, 0); }
+
+  // ---------- reset progress ----------
+  // Sets the 覚えた度合い back to 0 for all words, one tag, or the untagged words, in one or both directions.
+  // preset: a card deck to start from ({kind: "tag"|"notag"|"all"|"day"}).
+  function openResetDialog(preset) {
+    const tags = [...new Set(words.map(w => w.tag).filter(Boolean))].sort();
+    const hasNoTag = words.some(w => !w.tag);
+    const targets = [["all", `すべての単語（${words.length}語）`]];
+    if (plan && preset?.kind === "day") targets.push([`day:${preset.day}`, `${deckLabel(preset)}（${deckWords(preset).length}語）`]);
+    tags.forEach(t => targets.push([`tag:${t}`, `${t}（${words.filter(w => w.tag === t).length}語）`]));
+    if (hasNoTag) targets.push(["notag", `タグなし（${words.filter(w => !w.tag).length}語）`]);
+    const start = preset?.kind === "tag" ? `tag:${preset.tag}` : preset?.kind === "notag" ? "notag" : preset?.kind === "day" ? `day:${preset.day}` : "all";
+    let dir = "both";
+    const pick = v => v === "all" ? words : v === "notag" ? words.filter(w => !w.tag)
+      : v.startsWith("day:") ? deckWords({ kind: "day", day: +v.slice(4) }) : words.filter(w => w.tag === v.slice(4));
+    const learned = list => list.filter(w => (dir !== "ja" && lvOf(w, "en") > 0) || (dir !== "en" && lvOf(w, "ja") > 0));
+    $("#dlg-host").innerHTML = `<div class="overlay" id="ov"><form class="dlg deck-opts" id="rs">
+      <h3>習熟度をリセット</h3>
+      <label class="f">対象<select id="rs-target">${targets.map(([v, t]) => `<option value="${esc(v)}" ${v === start ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
+      <div class="opt-row"><span class="opt-label">向き</span><div class="seg" id="rs-dir">
+        <button type="button" data-v="both" aria-pressed="true">両方</button><button type="button" data-v="en" aria-pressed="false">英 → 日</button><button type="button" data-v="ja" aria-pressed="false">日 → 英</button>
+      </div></div>
+      <p class="msg" id="rs-note" style="margin:0"></p>
+      <div class="actions"><button class="btn danger" type="submit" id="rs-go">リセットする</button><button class="btn ghost" type="button" id="rs-cancel">キャンセル</button></div>
+    </form></div>`;
+    const go = $("#rs-go");
+    const update = () => {
+      const list = pick($("#rs-target").value), n = learned(list).length;
+      $("#rs-dir").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === dir));
+      $("#rs-note").textContent = n
+        ? `${list.length} 語のうち、${dir === "both" ? "英→日・日→英" : DIR_LABEL[dir]}で覚えた度合いがある ${n} 語を 0 に戻します。元に戻せません。`
+        : `${dir === "both" ? "" : DIR_LABEL[dir] + "で"}覚えた度合いがある単語はありません。`;
+      go.disabled = !n; go.classList.remove("armed"); go.textContent = "リセットする";
+    };
+    $("#rs-target").onchange = update;
+    $("#rs-dir").onclick = e => { const b = e.target.closest("button"); if (!b) return; dir = b.dataset.v; update(); };
+    $("#ov").onclick = e => { if (e.target.id === "ov") closeDlg(); };
+    $("#rs-cancel").onclick = closeDlg;
+    $("#rs").onsubmit = async e => {
+      e.preventDefault();
+      if (!go.classList.contains("armed")) { go.classList.add("armed"); go.textContent = "本当にリセットする"; return; }
+      const list = learned(pick($("#rs-target").value));
+      const fields = dir === "en" ? { level: 0, levelEn: 0 } : dir === "ja" ? { levelJa: 0 } : { level: 0, levelEn: 0, levelJa: 0 };
+      closeDlg();
+      await store.updateMany(list.map(w => w.id), fields);
+      toast(`${list.length} 語の習熟度をリセットしました`);
+    };
+    update();
+  }
+  $("#reset-btn").onclick = () => openResetDialog(ui.tag ? { kind: "tag", tag: ui.tag } : { kind: "all" });
 
   // ---------- books ----------
   function switchBook(id) {

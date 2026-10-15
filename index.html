@@ -69,6 +69,7 @@
       <select id="f-tag" aria-label="タグで絞り込み"><option value="">すべてのタグ</option></select>
       <button class="chip" id="sheet-btn" aria-pressed="false" title="意味を赤シートで隠す">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="6" width="18" height="12" rx="2"/></svg>赤シート</button>
+      <button class="chip" id="reset-btn" title="覚えた度合いを0に戻す">習熟度リセット</button>
     </div>
 
     <div id="list-host"></div>
@@ -76,18 +77,6 @@
 
   <!-- STUDY -->
   <section id="view-study" class="wrap" hidden>
-    <div class="study-opts">
-      <div class="seg" id="study-dir">
-        <button aria-pressed="true" data-v="en">英 → 日</button>
-        <button aria-pressed="false" data-v="ja">日 → 英</button>
-      </div>
-      <div class="seg" id="study-set">
-        <button aria-pressed="false" data-v="today">今日の分</button>
-        <button aria-pressed="true" data-v="todo">まだの単語</button>
-        <button aria-pressed="false" data-v="all">すべて</button>
-      </div>
-    </div>
-    <div class="plan-mini" id="study-plan" hidden></div>
     <div id="study-host"></div>
   </section>
 
