@@ -265,16 +265,14 @@ body.quiz-active #view-quiz .study-opts, body.quiz-active #quiz-count { display:
 
 /* phones: cards and running tests fit between the top of the screen and the bottom menu */
 @media (max-width: 719px) {
-  body[data-view="study"] header.top, body[data-view="study"] .bookbar,
+  body.study-active header.top, body.study-active .bookbar,
   body.quiz-active header.top, body.quiz-active .bookbar { display: none; }
-  body[data-view="study"], body.quiz-active { padding-top: 10px; }
-  body[data-view="study"] #view-study {
+  body.study-active, body.quiz-active { padding-top: 10px; }
+  body.study-active #view-study {
     height: calc(100dvh - env(safe-area-inset-top, 0px) - 10px - 88px - env(safe-area-inset-bottom, 0px));
-    display: flex; flex-direction: column; gap: 8px;
+    display: flex; flex-direction: column;
   }
-  body[data-view="study"] .study-opts { gap: 6px; }
-  body[data-view="study"] .seg button { padding: 6px 10px; }
-  #study-host { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+  body.study-active #study-host { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
   #study-host .deck { flex: 1; min-height: 150px; display: flex; }
   #study-host .card { flex: 1; min-height: 0; }
   #study-host .face { padding: 32px 18px 26px; }
@@ -296,3 +294,22 @@ body.quiz-active #view-quiz .study-opts, body.quiz-active #quiz-count { display:
 }
 #quiz-host { display: grid; gap: 10px; }
 .q-bar .link { white-space: nowrap; flex-shrink: 0; }
+
+/* card decks */
+#study-host { display: grid; gap: 10px; }
+.deck-picker { display: grid; gap: 12px; }
+.deck-book { font-weight: 500; }
+.deck-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.deck-tile { display: grid; gap: 4px; text-align: left; border: 1px solid var(--line); background: var(--card); border-radius: 12px; padding: 12px 14px; cursor: pointer; min-width: 0; color: var(--ink); }
+.deck-tile:hover { border-color: var(--ink); }
+.deck-title { font-weight: 700; font-size: 15px; overflow-wrap: anywhere; }
+.deck-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.deck-tile.today { background: var(--ink); border-color: var(--ink); color: var(--card); padding: 16px; box-shadow: var(--shadow); }
+.deck-tile.today .deck-title { font-size: 18px; }
+.deck-tile.today .deck-sub { color: var(--card); opacity: .75; font-size: 13px; }
+.deck-tile.today.muted { background: var(--card); color: var(--ink); border: 1px dashed var(--rule); box-shadow: none; }
+.deck-tile.today.muted .deck-sub { color: var(--muted); opacity: 1; }
+div.deck-tile { cursor: default; }
+.deck-opts .opt-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.deck-opts .opt-label { font-size: 12px; color: var(--muted); width: 2.5em; }
+.deck-opts .start { flex: 1; padding: 13px; font-size: 15px; }
