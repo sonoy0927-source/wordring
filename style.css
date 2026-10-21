@@ -334,3 +334,5 @@ div.deck-tile { cursor: default; }
 .day-row.is-today { font-weight: 700; background: var(--paper); }
 .day-row.is-past { opacity: .55; }
 @media (prefers-reduced-motion: reduce) { .deck-fold > summary::after { transition: none; } }
+.count-row .preset[aria-pressed="true"] { background: var(--ink); color: var(--card); border-color: var(--ink); }
+.deck-opts .opt-label { width: auto; min-width: 3.2em; white-space: nowrap; }
